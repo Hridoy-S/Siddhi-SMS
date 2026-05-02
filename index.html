@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Siddhi SMS</title>
+    <meta name="description" content="Bangladesh-focused Siddhi SMS SaaS for OTP, campaigns, wallet billing, masking approvals, and reseller workflows." />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="brand-mark logo-mark"><img src="assets/siddhi-sms-logo.png" alt="" onerror="this.remove()" /><span>SS</span></span>
+        <div>
+          <strong>Siddhi SMS</strong>
+          <small>Revenue Console</small>
+        </div>
+      </div>
+      <nav id="nav"></nav>
+      <div class="sidebar-footer">
+        <small>Workspace</small>
+        <strong>Dhaka Retail Ltd.</strong>
+      </div>
+    </aside>
+
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Bangladesh A2P SaaS</p>
+          <h1 id="page-title">Dashboard</h1>
+        </div>
+        <div class="top-actions">
+          <div id="mode-switch" class="segmented"></div>
+          <button class="icon-button" title="Notifications">!</button>
+          <button class="primary" data-action="new-campaign">Quick SMS</button>
+        </div>
+      </header>
+
+      <section id="view"></section>
+    </main>
+
+    <div id="toast" class="toast" role="status"></div>
+    <script src="app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,57 @@
+{
+  "users": [
+    {
+      "id": "u1",
+      "name": "Tanvir Ahmed",
+      "company": "Dhaka Retail Ltd.",
+      "email": "owner@dhakaretail.com",
+      "phone": "01711000001",
+      "balance": 184250,
+      "accountStatus": "Approved",
+      "maskingStatus": "Approved"
+    },
+    {
+      "id": "u2",
+      "name": "Green School Admin",
+      "company": "Green School",
+      "email": "admin@greenschool.edu.bd",
+      "phone": "01822000002",
+      "balance": 9800,
+      "accountStatus": "Approved",
+      "maskingStatus": "Pending"
+    }
+  ],
+  "packages": [
+    {
+      "id": "p1",
+      "name": "Starter Wallet",
+      "type": "non-masking",
+      "price": 3500,
+      "rate": 0.35,
+      "status": "Published"
+    },
+    {
+      "id": "p2",
+      "name": "Business Wallet",
+      "type": "non-masking",
+      "price": 16000,
+      "rate": 0.32,
+      "status": "Published"
+    },
+    {
+      "id": "p3",
+      "name": "Masking Wallet",
+      "type": "masking",
+      "price": 27500,
+      "rate": 0.55,
+      "status": "Published"
+    }
+  ],
+  "rates": {
+    "nonMasking": 0.3,
+    "masking": 0.48,
+    "otp": 0.34
+  },
+  "orders": [],
+  "messages": []
+}

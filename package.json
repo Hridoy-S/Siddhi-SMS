@@ -1,0 +1,14 @@
+{
+  "name": "siddhi-sms",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Siddhi SMS SaaS starter with landing page, admin portal, user portal, wallet billing and REST API.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "check": "node --check app.js && node --check server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

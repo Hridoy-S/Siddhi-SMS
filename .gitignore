@@ -1,0 +1,13 @@
+node_modules/
+.env
+*.log
+server-live.log
+server.out.log
+server.err.log
+ps-write-test.tmp
+node-write-test.tmp
+
+# Keep real production data outside git.
+data-store.production.json
+uploads/
+backups/
