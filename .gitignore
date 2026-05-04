@@ -1,5 +1,7 @@
 node_modules/
 .env
+.git-local/
+gitmeta/
 *.log
 server-live.log
 server.out.log

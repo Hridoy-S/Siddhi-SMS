@@ -8,6 +8,14 @@ const state = {
   loginPassword: "demo123",
   adminEmail: "admin@siddhisms.com",
   adminPassword: "admin123",
+  adminProfile: { id: "", name: "", company: "", email: "", phone: "", newPassword: "", confirmPassword: "" },
+  userSearch: "",
+  documentUrls: {},
+  modal: null,
+  resetToken: "",
+  resetEmail: "",
+  resetPassword: "",
+  resetPasswordConfirm: "",
   forgotEmail: "",
   signup: {
     name: "",
@@ -99,6 +107,107 @@ const state = {
   ]
 };
 
+let persistTimer = null;
+const sessionStorageKey = "siddhiSmsSession";
+
+function publicState() {
+  return {
+    currentUserId: state.currentUserId,
+    users: state.users,
+    audiences: state.audiences,
+    contacts: state.contacts,
+    campaigns: state.campaigns,
+    routes: state.routes,
+    packages: state.packages,
+    payments: state.payments,
+    invoices: state.invoices,
+    platformRates: state.platformRates,
+    rateDraft: state.rateDraft,
+    gatewaySettings: state.gatewaySettings,
+    senderId: state.senderId,
+    smsText: state.smsText
+  };
+}
+
+async function apiRequest(path, options = {}) {
+  const response = await fetch(path, {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...(options.headers || {})
+    }
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || `Request failed: ${response.status}`);
+  return payload;
+}
+
+function applyRemoteState(remote) {
+  if (!remote) return;
+  Object.assign(state, remote);
+  const fallbackAudience = state.audiences[0]?.id || "";
+  if (!state.selectedAudienceId || !state.audiences.some(item => item.id === state.selectedAudienceId)) state.selectedAudienceId = fallbackAudience;
+  if (!state.quickAudienceId || !state.audiences.some(item => item.id === state.quickAudienceId)) state.quickAudienceId = fallbackAudience;
+  if (!state.campaignAudienceId || !state.audiences.some(item => item.id === state.campaignAudienceId)) state.campaignAudienceId = fallbackAudience;
+  if (!state.manualContact.audienceId || !state.audiences.some(item => item.id === state.manualContact.audienceId)) state.manualContact.audienceId = fallbackAudience;
+}
+
+async function loadRemoteState(role, userId) {
+  const payload = await apiRequest(`/api/app/state?role=${encodeURIComponent(role)}&userId=${encodeURIComponent(userId)}`);
+  applyRemoteState(payload.state);
+}
+
+function saveSession(role = state.sessionRole, userId = state.currentUserId) {
+  if (!role || !userId) return;
+  localStorage.setItem(sessionStorageKey, JSON.stringify({ role, userId, savedAt: Date.now() }));
+}
+
+function clearSession() {
+  localStorage.removeItem(sessionStorageKey);
+}
+
+async function restoreSession() {
+  const raw = localStorage.getItem(sessionStorageKey);
+  if (!raw) {
+    render();
+    return;
+  }
+  try {
+    const saved = JSON.parse(raw);
+    if (!saved.role || !saved.userId) throw new Error("Invalid saved session");
+    state.sessionRole = saved.role;
+    state.mode = saved.role === "admin" ? "admin" : "user";
+    state.currentUserId = saved.userId;
+    state.active = "dashboard";
+    await loadRemoteState(saved.role, saved.userId);
+  } catch (error) {
+    clearSession();
+    state.sessionRole = null;
+    state.authView = "landing";
+    toast("Session expired. Please log in again.", "error");
+  }
+  render();
+}
+
+function persistAppState() {
+  if (!state.sessionRole || !state.currentUserId) return;
+  window.clearTimeout(persistTimer);
+  persistTimer = window.setTimeout(async () => {
+    try {
+      await apiRequest("/api/app/state", {
+        method: "PUT",
+        body: JSON.stringify({
+          role: state.sessionRole,
+          userId: state.currentUserId,
+          state: publicState()
+        })
+      });
+    } catch (error) {
+      toast(`Database sync failed: ${error.message}`, "error");
+    }
+  }, 250);
+}
+
 const adminNav = [
   ["dashboard", "Admin Dashboard", "D"],
   ["approvals", "Masking Approval", "V"],
@@ -111,7 +220,8 @@ const adminNav = [
   ["campaigns", "Campaigns", "C"],
   ["quick", "Quick Send", "Q"],
   ["billing", "Billing", "B"],
-  ["compliance", "Compliance", "K"]
+  ["compliance", "Compliance", "K"],
+  ["admin-profile", "Admin Profile", "S"]
 ];
 
 const userNav = [
@@ -169,7 +279,7 @@ function badge(value) {
   const v = String(value).toLowerCase();
   const cls = v.includes("dnd") || v.includes("due") || v.includes("pending") || v.includes("watch")
     ? "warn"
-    : v.includes("failed") || v.includes("blocked")
+    : v.includes("failed") || v.includes("blocked") || v.includes("suspended") || v.includes("rejected")
       ? "bad"
       : v.includes("live") || v.includes("approved") || v.includes("active")
         ? "info"
@@ -179,6 +289,14 @@ function badge(value) {
 
 function audienceName(id) {
   return state.audiences.find(audience => audience.id === id)?.name || "Unknown audience";
+}
+
+function userName(id) {
+  return state.users.find(user => user.id === id)?.company || "Unknown user";
+}
+
+function packageName(id) {
+  return state.packages.find(pkg => pkg.id === id)?.name || "Wallet package";
 }
 
 function audienceContacts(id) {
@@ -230,6 +348,19 @@ function liveRateForMessageType(type) {
   if (type === "otp") return state.platformRates.otp;
   if (type === "masking") return state.platformRates.masking;
   return state.platformRates.nonMasking;
+}
+
+function userCanUseMasking() {
+  return state.mode === "admin" || currentUser().maskingStatus === "Approved";
+}
+
+function smsTypeOptions(selectedType) {
+  const maskingLocked = !userCanUseMasking();
+  return ["otp", "transactional", "promotional", "masking", "non-masking"].map(type => {
+    const disabled = type === "masking" && maskingLocked ? "disabled" : "";
+    const label = type === "masking" && maskingLocked ? "masking (approval required)" : type;
+    return `<option value="${type}" ${selectedType === type ? "selected" : ""} ${disabled}>${label}</option>`;
+  }).join("");
 }
 
 function smsInfo(text, type = state.campaignType) {
@@ -293,6 +424,77 @@ function metric(label, value, hint, trend = "good") {
   return `<article class="metric"><small>${label}</small><strong>${value}</strong><span class="trend ${trend}">${hint}</span></article>`;
 }
 
+function dashboardReportCard(title, value, subtitle, tone = "green") {
+  return `
+    <article class="report-mini ${tone}">
+      <small>${escapeHtml(title)}</small>
+      <strong>${value}</strong>
+      <span>${escapeHtml(subtitle)}</span>
+    </article>
+  `;
+}
+
+function liquidAreaChart(title, value, subtitle, stats) {
+  return `
+    <section class="panel report-hero">
+      <div class="between">
+        <div>
+          <p class="eyebrow">Live Reports</p>
+          <h2>${escapeHtml(title)}</h2>
+        </div>
+        <div class="report-toggle"><span>Today</span><strong>Week</strong></div>
+      </div>
+      <div class="report-balance">
+        <strong>${value}</strong>
+        <span class="trend good">↗ ${escapeHtml(subtitle)}</span>
+      </div>
+      <div class="area-chart" aria-label="${escapeHtml(title)} chart">
+        <svg viewBox="0 0 620 220" role="img">
+          <defs>
+            <linearGradient id="siddhiArea" x1="0" x2="0" y1="0" y2="1">
+              <stop offset="0%" stop-color="#86efac" stop-opacity="0.44" />
+              <stop offset="58%" stop-color="#0f6f54" stop-opacity="0.26" />
+              <stop offset="100%" stop-color="#000000" stop-opacity="0" />
+            </linearGradient>
+            <linearGradient id="siddhiLine" x1="0" x2="1">
+              <stop offset="0%" stop-color="#86efac" />
+              <stop offset="58%" stop-color="#17a982" />
+              <stop offset="100%" stop-color="#0f6f54" />
+            </linearGradient>
+          </defs>
+          <path class="chart-grid" d="M20 50H600M20 100H600M20 150H600M20 200H600" />
+          <path class="chart-area" d="M20 158 C80 80 120 170 170 118 S260 80 315 132 390 172 445 104 540 74 600 92 L600 210 L20 210 Z" />
+          <path class="chart-line" d="M20 158 C80 80 120 170 170 118 S260 80 315 132 390 172 445 104 540 74 600 92" />
+          <circle cx="540" cy="74" r="8" />
+        </svg>
+        <div class="chart-tip"><small>Peak</small><strong>${stats[0]?.value || value}</strong></div>
+        <div class="chart-days"><span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span><span>Sun</span></div>
+      </div>
+      <div class="report-mini-grid">${stats.map(item => dashboardReportCard(item.title, item.value, item.subtitle, item.tone)).join("")}</div>
+    </section>
+  `;
+}
+
+function liquidDonut(title, total, items) {
+  const color = ["#86efac", "#17a982", "#0f6f54", "#fbbf24"];
+  return `
+    <section class="panel report-donut">
+      <div class="between"><h2>${escapeHtml(title)}</h2><button class="secondary">Detail ›</button></div>
+      <div class="donut-layout">
+        <div>
+          <small>Total</small>
+          <strong>${total}</strong>
+          <ul>${items.map((item, index) => `<li><span style="background:${color[index % color.length]}"></span>${escapeHtml(item.label)} <b>${item.value}</b></li>`).join("")}</ul>
+        </div>
+        <div class="donut-rings" aria-hidden="true">
+          ${items.map((item, index) => `<i style="--ring:${index};--value:${Math.min(92, 34 + item.value)};--ring-color:${color[index % color.length]}"></i>`).join("")}
+          <em></em>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
 function featureCard(title, body, tag) {
   return `<article class="feature-card">
     <span>${escapeHtml(tag)}</span>
@@ -337,10 +539,22 @@ function dashboard() {
   const delivered = state.campaigns.reduce((sum, item) => sum + item.delivered, 0);
   const sent = state.campaigns.reduce((sum, item) => sum + item.sent, 0);
   const pendingPayments = state.payments.filter(payment => payment.status === "Pending").length;
+  const totalWallet = state.users.reduce((sum, user) => sum + user.balance, 0);
+  const totalCustomers = state.users.length;
+  const totalCost = state.campaigns.reduce((sum, campaign) => sum + Number(campaign.cost || 0), 0);
+  const totalRevenue = state.payments.filter(payment => payment.status === "Completed").reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
+  const totalProfit = Math.max(0, totalRevenue - totalCost);
+  const deliveryRate = sent ? `${((delivered / sent) * 100).toFixed(1)}% delivery rate` : "No traffic yet";
   return `
+    ${liquidAreaChart("Platform Balance", taka(totalWallet), deliveryRate, [
+      { title: "Total customers", value: totalCustomers.toLocaleString(), subtitle: "registered accounts", tone: "green" },
+      { title: "Total cost", value: taka(totalCost), subtitle: "campaign spend", tone: "gold" },
+      { title: "Total profit", value: taka(totalProfit), subtitle: "completed revenue less cost", tone: "green" },
+      { title: "Pending payments", value: pendingPayments, subtitle: "waiting approval", tone: pendingPayments ? "gold" : "green" }
+    ])}
     <div class="grid metrics">
-      ${metric("Total client wallet", taka(state.users.reduce((sum, user) => sum + user.balance, 0)), "Across active tenants")}
-      ${metric("Delivery rate", `${((delivered / sent) * 100).toFixed(1)}%`, "All demo routes")}
+      ${metric("Total client wallet", taka(totalWallet), "Across active tenants")}
+      ${metric("Delivery rate", sent ? `${((delivered / sent) * 100).toFixed(1)}%` : "0%", "All demo routes")}
       ${metric("Pending payments", pendingPayments, "Approve after bKash/Nagad check", pendingPayments ? "warn" : "good")}
       ${metric("Audiences", state.audiences.length, `${state.contacts.length} total contacts`)}
     </div>
@@ -352,6 +566,18 @@ function dashboard() {
       <section class="panel">
         <h2>Route Health</h2>
         <ul class="checklist">${state.routes.map(route => `<li class="check"><span class="dot ${route.health === "Watch" ? "warn" : ""}"></span><div><strong>${route.name}</strong><p class="hint">${route.type} · ${route.uptime}% uptime · ${route.latency}</p></div></li>`).join("")}</ul>
+      </section>
+    </div>
+    <div class="grid two report-row">
+      ${liquidDonut("Traffic Mix", sent.toLocaleString(), [
+        { label: "Success", value: Math.round((delivered / sent) * 100) },
+        { label: "Waiting", value: pendingPayments * 12 },
+        { label: "Masking", value: 36 },
+        { label: "OTP", value: 28 }
+      ])}
+      <section class="panel report-feed">
+        <div class="between"><h2>Recent order</h2><button class="secondary" data-view="orders">View all</button></div>
+        <ul>${state.payments.slice(0, 4).map(payment => `<li><span>${escapeHtml(userName(payment.userId))}</span><b>${taka(payment.amount)}</b>${badge(payment.status)}</li>`).join("")}</ul>
       </section>
     </div>
   `;
@@ -371,8 +597,8 @@ function publicTitle() {
 function publicActions() {
   return `
     <button class="secondary" data-auth="landing">Home</button>
-    <button class="secondary" data-auth="user-login">User Login</button>
-    <button class="primary" data-auth="signup">Create Account</button>
+    <button class="secondary" data-auth="user-login">Login</button>
+    <button class="primary" data-auth="signup">Sign Up</button>
     <button class="secondary" data-auth="admin-login">Admin</button>
   `;
 }
@@ -383,87 +609,152 @@ function publicView() {
     "user-login": userLogin,
     "admin-login": adminLogin,
     signup,
-    forgot
+    forgot,
+    "reset-password": resetPasswordView
   };
   return (views[state.authView] || landing)();
 }
 
+async function openResetFromUrl() {
+  const token = new URLSearchParams(window.location.search).get("reset");
+  if (!token) return false;
+  state.resetToken = token;
+  state.authView = "reset-password";
+  try {
+    const payload = await apiRequest(`/api/app/password-reset/verify?token=${encodeURIComponent(token)}`);
+    state.resetEmail = payload.reset.email || "";
+  } catch (error) {
+    toast(error.message || "Reset link is invalid or expired.", "error");
+  }
+  window.history.replaceState({}, "", window.location.pathname);
+  return true;
+}
+
 function landing() {
+  return authExperience("user-login", userLoginForm(), "আপনার ব্যবসার সাথে যোগাযোগ হোক আরও সহজ");
+}
+
+function authExperience(activeTab, formMarkup, headline = "আপনার ব্যবসার সাথে যোগাযোগ হোক আরও সহজ") {
   return `
-    <section class="landing-hero">
-      <div class="landing-copy">
-        <p class="eyebrow">Bangladesh A2P SMS SaaS</p>
-        <h1>Siddhi SMS</h1>
-        <p>Launch bulk SMS, OTP, masking approval, wallet billing, contact imports, campaign reporting and customer self-service from one revenue-ready platform.</p>
-        <div class="row">
-          <button class="primary" data-auth="signup">Start as customer</button>
-          <button class="secondary" data-auth="admin-login">Admin portal</button>
-        </div>
-        <div class="hero-proof">
-          <span>REST API</span>
-          <span>Wallet billing</span>
-          <span>bKash/Nagad ready</span>
+    <section class="auth-stage">
+      <span class="auth-orbit orbit-one"></span>
+      <span class="auth-orbit orbit-two"></span>
+      <div class="auth-shell">
+        <aside class="auth-brand-panel">
+          <div class="auth-logo-wrap">
+            <img src="assets/siddhi-sms-logo.png" alt="Siddhi SMS logo" />
+          </div>
+          <h2><span class="brand-siddhi">Siddhi</span> <span class="brand-sms">SMS</span></h2>
+          <p class="auth-subtitle">স্মার্ট এসএমএস সল্যুশন</p>
+          <div class="leaf-divider"></div>
+          <h3>${headline}</h3>
+          <p class="auth-lead">Siddhi SMS আপনার ব্যবসাকে দেয় দ্রুত, নিরাপদ ও নির্ভরযোগ্য এসএমএস সার্ভিস সমাধান।</p>
+          <ul class="auth-benefits">
+            <li><span>↗</span>দ্রুত ও নির্ভরযোগ্য ডেলিভারি</li>
+            <li><span>♣</span>বাল্ক এসএমএস ও কাস্টমার ম্যানেজমেন্ট</li>
+            <li><span>◆</span>সুরক্ষিত ও প্রাইভেসি ফোকাসড</li>
+            <li><span>▥</span>রিয়েল-টাইম রিপোর্ট ও অ্যানালিটিক্স</li>
+          </ul>
+          <div class="device-preview" aria-hidden="true">
+            <div class="preview-screen">
+              <div class="preview-sidebar"></div>
+              <div class="preview-content">
+                <span></span><span></span><span></span>
+                <strong></strong>
+              </div>
+            </div>
+            <div class="preview-phone"></div>
+            <div class="paper-plane"></div>
+          </div>
+        </aside>
+        <div class="auth-form-panel">
+          <div class="auth-card">
+            <div class="auth-tabs">
+              <button class="${activeTab === "user-login" || activeTab === "admin-login" ? "active" : ""}" data-auth="${activeTab === "admin-login" ? "admin-login" : "user-login"}">লগ ইন</button>
+              <button class="${activeTab === "signup" ? "active" : ""}" data-auth="signup">সাইন আপ</button>
+            </div>
+            ${formMarkup}
+          </div>
         </div>
       </div>
-      <div class="landing-visual">
-        <div class="glass-phone">
-          <span>Revenue engine</span>
-          <strong>${taka(state.users.reduce((sum, user) => sum + user.balance, 0))}</strong>
-          <small>Active customer wallet balance</small>
-        </div>
-        <div class="glass-strip"><b>Masking approval</b><em>Docs verified by admin</em></div>
-        <div class="glass-strip"><b>Wallet billing</b><em>Rate based deduction</em></div>
-        <div class="glass-strip"><b>API traffic</b><em>Server starter included</em></div>
-      </div>
-    </section>
-    <section class="grid three" style="margin-top:16px">
-      ${featureCard("Customer signup to approval", "Users create profiles, submit company details, and wait for admin approval before sending traffic.", "Account")}
-      ${featureCard("Wallet packages", "Customers buy wallet packages. Admin completion or gateway webhook credits the wallet once.", "Revenue")}
-      ${featureCard("SMS API and dashboard", "Quick Send, campaigns and REST endpoints share the same live rate and wallet deduction rules.", "API")}
-    </section>
-    <section class="panel landing-band">
-      <div>
-        <p class="eyebrow">Go-live stack</p>
-        <h2>Website, admin console, user portal and API server are prepared together.</h2>
-      </div>
-      <ul class="checklist">
-        <li class="check"><span class="dot"></span><div><strong>Payment flow</strong><p class="hint">Manual TRX review works now. bKash/Nagad gateway adapters are in the Node server for merchant credentials.</p></div></li>
-        <li class="check"><span class="dot"></span><div><strong>API flow</strong><p class="hint">Server exposes auth, packages, orders, wallet send and webhook endpoints.</p></div></li>
-        <li class="check"><span class="dot warn"></span><div><strong>Before real money</strong><p class="hint">Add merchant credentials, SMS gateway credentials, database, HTTPS and compliance review.</p></div></li>
-      </ul>
+      <footer class="auth-footer">
+        <span>© 2026 Siddhi SMS. সর্বস্বত্ব সংরক্ষিত।</span>
+        <button data-auth="landing">গোপনীয়তা নীতি</button>
+        <button data-auth="landing">শর্তাবলী</button>
+        <button data-auth="forgot">সহায়তা</button>
+      </footer>
     </section>
   `;
 }
 
 function userLogin() {
+  return authExperience("user-login", userLoginForm());
+}
+
+function userLoginForm() {
   return `
-    <section class="panel auth-panel">
-      <h2>User Login</h2>
-      <div class="form">
-        <div class="field"><label>Email</label><input id="login-email" value="${escapeHtml(state.loginEmail)}" /></div>
-        <div class="field"><label>Password</label><input id="login-password" type="password" value="${escapeHtml(state.loginPassword)}" /></div>
-        <button class="primary" data-action="user-login">Login to user panel</button>
-        <button class="secondary" data-auth="forgot">Forgot password?</button>
-      </div>
-    </section>
+    <div class="auth-copy">
+      <h2>স্বাগতম!</h2>
+      <p>আপনার অ্যাকাউন্টে লগ ইন করুন</p>
+    </div>
+    <div class="form auth-form">
+      <div class="field input-icon"><label>ইমেইল ঠিকানা</label><input id="login-email" value="${escapeHtml(state.loginEmail)}" placeholder="আপনার ইমেইল লিখুন" /><span>✉</span></div>
+      <div class="field input-icon"><label>পাসওয়ার্ড</label><input id="login-password" type="password" value="${escapeHtml(state.loginPassword)}" placeholder="আপনার পাসওয়ার্ড লিখুন" /><span>●</span></div>
+      <div class="auth-options"><label class="check-label"><input type="checkbox" /> আমাকে মনে রাখুন</label><button class="link-button" data-auth="forgot">পাসওয়ার্ড ভুলেছেন?</button></div>
+      <button class="primary auth-submit" data-action="user-login">লগ ইন করুন</button>
+      <div class="auth-separator"><span>অথবা</span></div>
+      <button class="secondary google-button" type="button"><span>G</span> Google দিয়ে লগ ইন করুন</button>
+      <p class="auth-switch">আপনার অ্যাকাউন্ট নেই? <button data-auth="signup">সাইন আপ করুন</button></p>
+      <p class="auth-switch admin-entry">Admin access? <button data-auth="admin-login">Open admin portal</button></p>
+    </div>
   `;
 }
 
 function adminLogin() {
   return `
-    <section class="panel auth-panel">
-      <h2>Admin Login</h2>
-      <p class="hint">Demo admin: admin@siddhisms.com / admin123</p>
-      <div class="form">
-        <div class="field"><label>Admin email</label><input id="admin-email" value="${escapeHtml(state.adminEmail)}" /></div>
-        <div class="field"><label>Password</label><input id="admin-password" type="password" value="${escapeHtml(state.adminPassword)}" /></div>
-        <button class="primary" data-action="admin-login">Login to admin panel</button>
+    ${authExperience("admin-login", `
+      <div class="auth-copy">
+        <h2>অ্যাডমিন লগ ইন</h2>
+        <p>প্ল্যাটফর্ম কন্ট্রোল সেন্টারে প্রবেশ করুন</p>
       </div>
-    </section>
+      <div class="form auth-form">
+        <p class="hint">Demo admin: admin@siddhisms.com / admin123</p>
+        <div class="field input-icon"><label>অ্যাডমিন ইমেইল</label><input id="admin-email" value="${escapeHtml(state.adminEmail)}" /><span>✉</span></div>
+        <div class="field input-icon"><label>পাসওয়ার্ড</label><input id="admin-password" type="password" value="${escapeHtml(state.adminPassword)}" /><span>●</span></div>
+        <button class="primary auth-submit" data-action="admin-login">অ্যাডমিন প্যানেলে যান</button>
+        <p class="auth-switch">Customer login? <button data-auth="user-login">Back to user login</button></p>
+      </div>
+    `, "আপনার অপারেশন থাকুক সম্পূর্ণ নিয়ন্ত্রণে")}
   `;
 }
 
 function signup() {
+  return authExperience("signup", `
+    <div class="auth-copy">
+      <h2>অ্যাকাউন্ট তৈরি করুন</h2>
+      <p>সাইন আপের পর অ্যাডমিন অনুমোদন পেলেই লাইভ সেন্ডিং চালু হবে</p>
+    </div>
+    <div class="form auth-form signup-form">
+      <div class="grid two">
+        <div class="field"><label>আপনার নাম</label><input id="signup-name" value="${escapeHtml(state.signup.name)}" /></div>
+        <div class="field"><label>কোম্পানির নাম</label><input id="signup-company" value="${escapeHtml(state.signup.company)}" /></div>
+      </div>
+      <div class="grid two">
+        <div class="field"><label>ইমেইল</label><input id="signup-email" value="${escapeHtml(state.signup.email)}" /></div>
+        <div class="field"><label>ফোন</label><input id="signup-phone" value="${escapeHtml(state.signup.phone)}" /></div>
+      </div>
+      <div class="grid two">
+        <div class="field"><label>কোম্পানি টাইপ</label><select id="signup-company-type">${["E-commerce", "Education", "Healthcare", "ISP", "Finance", "Agency", "Other"].map(type => `<option ${state.signup.companyType === type ? "selected" : ""}>${type}</option>`).join("")}</select></div>
+      </div>
+      <div class="field"><label>ঠিকানা</label><input id="signup-address" value="${escapeHtml(state.signup.address)}" /></div>
+      <div class="field"><label>পাসওয়ার্ড</label><input id="signup-password" type="password" value="${escapeHtml(state.signup.password)}" /></div>
+      <button class="primary auth-submit" data-action="signup-submit">অনুমোদনের জন্য জমা দিন</button>
+      <p class="auth-switch">আগেই অ্যাকাউন্ট আছে? <button data-auth="user-login">লগ ইন করুন</button></p>
+    </div>
+  `);
+}
+
+function legacySignup() {
   return `
     <section class="panel auth-panel wide">
       <h2>Create Customer Account</h2>
@@ -479,7 +770,6 @@ function signup() {
         </div>
         <div class="grid two">
           <div class="field"><label>Company type</label><select id="signup-company-type">${["E-commerce", "Education", "Healthcare", "ISP", "Finance", "Agency", "Other"].map(type => `<option ${state.signup.companyType === type ? "selected" : ""}>${type}</option>`).join("")}</select></div>
-          <div class="field"><label>Profile photo initials</label><input id="signup-avatar" maxlength="2" value="${escapeHtml(state.signup.avatar)}" placeholder="DR" /></div>
         </div>
         <div class="field"><label>Address</label><input id="signup-address" value="${escapeHtml(state.signup.address)}" /></div>
         <div class="field"><label>Password</label><input id="signup-password" type="password" value="${escapeHtml(state.signup.password)}" /></div>
@@ -490,22 +780,46 @@ function signup() {
 }
 
 function forgot() {
-  return `
-    <section class="panel auth-panel">
-      <h2>Password Reset</h2>
-      <p class="hint">In production this sends an email. In this review build it creates an admin-visible reset action.</p>
-      <div class="form">
-        <div class="field"><label>Email</label><input id="forgot-email" value="${escapeHtml(state.forgotEmail)}" /></div>
-        <button class="primary" data-action="forgot-submit">Request reset email</button>
-      </div>
-    </section>
-  `;
+  return authExperience("user-login", `
+    <div class="auth-copy">
+      <h2>পাসওয়ার্ড রিসেট</h2>
+      <p>ইমেইল দিন, আমরা রিসেট অনুরোধ তৈরি করব</p>
+    </div>
+    <div class="form auth-form">
+      <div class="field input-icon"><label>ইমেইল</label><input id="forgot-email" value="${escapeHtml(state.forgotEmail)}" /><span>✉</span></div>
+      <button class="primary auth-submit" data-action="forgot-submit">রিসেট অনুরোধ পাঠান</button>
+      <button class="secondary" data-auth="user-login">লগ ইনে ফিরুন</button>
+    </div>
+  `, "নিরাপদ অ্যাক্সেস, দ্রুত পুনরুদ্ধার");
+}
+
+function resetPasswordView() {
+  return authExperience("user-login", `
+    <div class="auth-copy">
+      <h2>Set new password</h2>
+      <p>${state.resetEmail ? `Reset password for ${escapeHtml(state.resetEmail)}` : "Create a new secure password for your account"}</p>
+    </div>
+    <div class="form auth-form">
+      <div class="field input-icon"><label>New password</label><input id="reset-password" type="password" value="${escapeHtml(state.resetPassword)}" /><span>●</span></div>
+      <div class="field input-icon"><label>Confirm password</label><input id="reset-password-confirm" type="password" value="${escapeHtml(state.resetPasswordConfirm)}" /><span>●</span></div>
+      <button class="primary auth-submit" data-action="reset-password-submit">Update password</button>
+      <button class="secondary" data-auth="user-login">Back to login</button>
+    </div>
+  `, "নিরাপদ পাসওয়ার্ড, নিরাপদ অ্যাক্সেস");
 }
 
 function userDashboard() {
   const user = currentUser();
   const userPending = state.payments.filter(payment => payment.userId === user.id && payment.status === "Pending").length;
+  const delivered = state.campaigns.reduce((sum, item) => sum + item.delivered, 0);
+  const sent = state.campaigns.reduce((sum, item) => sum + item.sent, 0);
   return `
+    ${liquidAreaChart("Wallet & Delivery", taka(user.balance), `${user.plan} package`, [
+      { title: "Wallet", value: taka(user.balance), subtitle: "approved balance", tone: "green" },
+      { title: "Delivered", value: delivered.toLocaleString(), subtitle: "campaign traffic", tone: "gold" },
+      { title: "Contacts", value: state.contacts.length, subtitle: "available audience", tone: "green" },
+      { title: "Pending", value: userPending, subtitle: "top-up request", tone: userPending ? "gold" : "green" }
+    ])}
     <div class="grid metrics">
       ${metric("Wallet balance", taka(user.balance), `${user.plan} package`)}
       ${metric("Account", user.accountStatus, "Admin approval status", user.accountStatus === "Approved" ? "good" : "warn")}
@@ -525,6 +839,18 @@ function userDashboard() {
           <li class="check"><span class="dot"></span><div><strong>Buy package</strong><p class="hint">Package price is added to wallet after admin completion.</p></div></li>
           <li class="check"><span class="dot"></span><div><strong>Send message</strong><p class="hint">Select audience from Quick Send or Campaigns.</p></div></li>
         </ul>
+      </section>
+    </div>
+    <div class="grid two report-row">
+      ${liquidDonut("Campaign Status", sent.toLocaleString(), [
+        { label: "Success", value: Math.round((delivered / sent) * 100) },
+        { label: "Waiting", value: 32 },
+        { label: "Processing", value: 24 },
+        { label: "Review", value: userPending ? 18 : 8 }
+      ])}
+      <section class="panel report-feed">
+        <div class="between"><h2>Recent package orders</h2><button class="secondary" data-view="billing">Billing</button></div>
+        <ul>${state.payments.filter(payment => payment.userId === user.id).slice(0, 4).map(payment => `<li><span>${escapeHtml(packageName(payment.packageId))}</span><b>${taka(payment.amount)}</b>${badge(payment.status)}</li>`).join("") || `<li><span>No package order yet</span><b>${taka(0)}</b>${badge("Ready")}</li>`}</ul>
       </section>
     </div>
   `;
@@ -602,7 +928,7 @@ function masking() {
             <label>Company documents *</label>
             <label class="file-drop" for="mask-documents">
               <strong>Upload company documents</strong>
-              <span>${request.documents?.length ? request.documents.map(escapeHtml).join(", ") : "No document selected yet"}</span>
+              <span>${request.documents?.length ? request.documents.map(documentDisplayName).map(escapeHtml).join(", ") : "No document selected yet"}</span>
             </label>
             <input id="mask-documents" class="file-input-hidden" type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.doc,.docx" />
             <span class="hint">Upload trade license, BIN/TIN certificate, company authorization or related documents.</span>
@@ -622,12 +948,15 @@ function masking() {
 }
 
 function approvals() {
-  const maskingRequests = state.users.filter(user => user.maskingStatus === "Pending");
+  const maskingRequests = sortedAdminUsers().filter(user => user.maskingRequest || user.maskingStatus !== "Not applied");
+  const pendingCount = maskingRequests.filter(user => user.maskingStatus === "Pending").length;
   return `
-    <section class="panel">
-      <div class="between"><h2>Masking Approval</h2>${badge(`${maskingRequests.length} pending`)}</div>
-      <p class="hint">Only masking requests appear here. Review BIN/TIN and company documentation before enabling Masking SMS.</p>
-      ${maskingApprovalCards(maskingRequests)}
+    <section class="panel admin-panel">
+      <div class="panel-head">
+        <div><h2>Masking Approval Requests</h2><p class="hint">Review company identity, BIN/TIN and submitted documentation before enabling Masking SMS.</p></div>
+        ${badge(`${pendingCount} pending`)}
+      </div>
+      ${maskingApprovalTable(maskingRequests)}
     </section>
   `;
 }
@@ -658,6 +987,39 @@ function maskingApprovalCards(rows) {
   `).join("")}</div>`;
 }
 
+function maskingApprovalTable(rows) {
+  if (!rows.length) return `<div class="empty-state">No masking approval requests found.</div>`;
+  return `
+    <div class="table-shell">
+      <table class="data-table masking-table">
+        <thead><tr><th>User</th><th>Company</th><th>Company phone</th><th>Company email</th><th>BIN/TIN</th><th>Action</th></tr></thead>
+        <tbody>${rows.map(user => {
+          const request = user.maskingRequest || {};
+          return `<tr>
+            <td><strong>${escapeHtml(user.name)}</strong><span class="cell-sub">${escapeHtml(user.accountStatus || "")}</span></td>
+            <td><strong>${escapeHtml(request.companyName || user.company)}</strong><span class="cell-sub">${escapeHtml(request.companyType || user.companyType || "Not submitted")} · ${badge(user.maskingStatus)}</span></td>
+            <td><span class="cell-clip">${escapeHtml(request.phone || "Not submitted")}</span></td>
+            <td><span class="cell-clip">${escapeHtml(request.email || "Not submitted")}</span></td>
+            <td><span class="cell-clip">${escapeHtml(request.binTax || user.binTax || "Not submitted")}</span></td>
+            <td>
+              <div class="user-actions">
+                <button class="secondary" data-action="view-masking" data-id="${user.id}">View</button>
+                <details class="action-menu">
+                  <summary>Edit</summary>
+                  <div class="action-menu-panel">
+                    <button class="primary" data-action="approve-masking" data-id="${user.id}">Approve masking</button>
+                    <button class="danger" data-action="reject-masking" data-id="${user.id}">Reject</button>
+                  </div>
+                </details>
+              </div>
+            </td>
+          </tr>`;
+        }).join("")}</tbody>
+      </table>
+    </div>
+  `;
+}
+
 function maskingRequestDetails(user) {
   const request = user.maskingRequest || {};
   return `
@@ -671,28 +1033,281 @@ function maskingRequestDetails(user) {
 }
 
 function users() {
-  const pendingAccounts = state.users.filter(user => user.accountStatus !== "Approved");
+  const sortedUsers = sortedAdminUsers();
+  const query = state.userSearch.trim().toLowerCase();
+  const visibleUsers = query
+    ? sortedUsers.filter(user => [user.name, user.email, user.company, user.phone].some(value => String(value || "").toLowerCase().includes(query)))
+    : sortedUsers;
+  const pendingAccounts = sortedUsers.filter(user => user.accountStatus !== "Approved");
   return `
-    <div class="grid two">
-      <section class="panel">
-        <div class="between"><h2>Users & Accounts</h2>${badge("Admin only")}</div>
-        ${usersTable()}
+    <div class="users-page-stack">
+      <section class="panel admin-panel users-control-panel">
+        <div class="panel-head">
+          <div><h2>Users & Accounts</h2><p class="hint">Customer profiles, approval status, active plans, wallet balance and account controls.</p></div>
+          ${badge(`${visibleUsers.length} shown`)}
+        </div>
+        <div class="user-search-row">
+          <div>
+            <label for="user-search">Search users</label>
+            <input id="user-search" class="user-search-input" value="${escapeHtml(state.userSearch)}" placeholder="Search by name, email, company or phone" />
+          </div>
+          <p class="hint">Newest accounts appear first so fresh signups are easy to review.</p>
+        </div>
+        ${usersTable(visibleUsers)}
       </section>
-      <section class="panel">
-        <div class="between"><h2>Account Approvals</h2>${badge(`${pendingAccounts.length} pending`)}</div>
-        <p class="hint">New registered users appear here. View their profile details and approve after checking the information.</p>
+      <section class="panel admin-panel">
+        <div class="panel-head"><div><h2>Account Approvals</h2><p class="hint">Review new signups before allowing live sending.</p></div>${badge(`${pendingAccounts.length} pending`)}</div>
+        <p class="hint">New registered users appear here first. View their profile details and approve after checking the information.</p>
         ${accountApprovalCards(pendingAccounts)}
       </section>
     </div>
   `;
 }
 
-function usersTable() {
+function sortedAdminUsers() {
+  return [...state.users].sort((a, b) => {
+    const bTime = Date.parse(b.createdAt || "") || 0;
+    const aTime = Date.parse(a.createdAt || "") || 0;
+    if (bTime !== aTime) return bTime - aTime;
+    return String(b.id || "").localeCompare(String(a.id || ""));
+  });
+}
+
+function usersTable(rows = state.users) {
+  if (!rows.length) {
+    return `<div class="empty-state">No users match your search.</div>`;
+  }
   return `
-    <table>
-      <thead><tr><th>User</th><th>Email</th><th>Plan</th><th>Balance</th><th>Status</th></tr></thead>
-      <tbody>${state.users.map(user => `<tr><td>${escapeHtml(user.name)}</td><td>${escapeHtml(user.email)}</td><td>${escapeHtml(user.plan)}</td><td>${taka(user.balance)}</td><td>${badge(user.status)}</td></tr>`).join("")}</tbody>
-    </table>
+    <div class="table-shell">
+      <table class="data-table users-table">
+        <thead><tr><th>User</th><th>Email</th><th>Phone</th><th>Plan</th><th>Balance</th><th>Status</th><th>Action</th></tr></thead>
+        <tbody>${rows.map(user => `<tr>
+          <td><strong>${escapeHtml(user.name)}</strong><span class="cell-sub">${escapeHtml(user.company)}</span></td>
+          <td><span class="cell-clip">${escapeHtml(user.email)}</span></td>
+          <td><span class="cell-clip">${escapeHtml(user.phone)}</span></td>
+          <td>${escapeHtml(user.plan)}</td>
+          <td>${taka(user.balance)}</td>
+          <td>${badge(user.status)}</td>
+          <td>
+            <div class="user-actions">
+              <button class="secondary" data-action="view-account" data-id="${user.id}">View</button>
+              <details class="action-menu">
+                <summary>Edit</summary>
+                <div class="action-menu-panel">
+                  ${user.status === "Suspended" ? `<button class="primary" data-action="activate-account" data-id="${user.id}">Activate</button>` : `<button class="secondary" data-action="deactivate-account" data-id="${user.id}">Deactivate</button>`}
+                  <button class="secondary" data-action="send-reset" data-id="${user.id}">Reset link</button>
+                  <button class="danger" data-action="delete-account" data-id="${user.id}">Delete</button>
+                </div>
+              </details>
+            </div>
+          </td>
+        </tr>`).join("")}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+function adminProfile() {
+  return `
+    <section class="panel admin-panel admin-profile-panel">
+      <div class="panel-head">
+        <div><h2>Admin Account Settings</h2><p class="hint">Change the admin profile email, contact details and password used for the admin portal.</p></div>
+        ${badge("Secure")}
+      </div>
+      ${adminAccountSettings()}
+    </section>
+  `;
+}
+
+function userInfoRows(user) {
+  const request = user.maskingRequest || {};
+  return [
+    ["User", user.name],
+    ["Company", user.company],
+    ["Email", user.email],
+    ["Phone", user.phone],
+    ["Address", user.address || "Not submitted"],
+    ["Company type", user.companyType || "Not submitted"],
+    ["Plan", user.plan],
+    ["Wallet balance", taka(user.balance)],
+    ["Account status", user.accountStatus],
+    ["Login status", user.status],
+    ["Masking status", user.maskingStatus],
+    ["BIN / TIN", user.binTax || "Not submitted"],
+    ["Documents", user.docs || "Not submitted"],
+    ["Created", user.createdAt ? new Date(user.createdAt).toLocaleString("en-BD") : "Not available"],
+    ["Masking company", request.companyName || "Not applied"],
+    ["Masking contact", request.email || request.phone ? `${request.email || user.email} · ${request.phone || user.phone}` : "Not applied"],
+    ["Admin note", request.note || "No note"]
+  ];
+}
+
+function userDetailModal(user) {
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="detail-modal" role="dialog" aria-modal="true" aria-labelledby="user-detail-title">
+        <button class="modal-close" data-action="close-modal" aria-label="Close popup">×</button>
+        <div class="modal-head">
+          <div>
+            <p class="eyebrow">Account Profile</p>
+            <h2 id="user-detail-title">${escapeHtml(user.company || user.name)}</h2>
+            <p class="hint">${escapeHtml(user.name)} · ${escapeHtml(user.email)}</p>
+          </div>
+          ${badge(user.status)}
+        </div>
+        <div class="modal-summary-grid">
+          <span><small>Plan</small><strong>${escapeHtml(user.plan)}</strong></span>
+          <span><small>Balance</small><strong>${taka(user.balance)}</strong></span>
+          <span><small>Phone</small><strong>${escapeHtml(user.phone)}</strong></span>
+        </div>
+        <div class="modal-table-wrap">
+          <table class="detail-table">
+            <tbody>
+              ${userInfoRows(user).map(([label, value]) => `
+                <tr>
+                  <th>${escapeHtml(label)}</th>
+                  <td>${escapeHtml(value)}</td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+function requestDocuments(user) {
+  const docs = user.maskingRequest?.documents;
+  if (Array.isArray(docs) && docs.length) return docs;
+  return String(user.docs || "")
+    .split(",")
+    .map(item => item.trim())
+    .filter(Boolean);
+}
+
+function documentDisplayName(documentValue) {
+  return typeof documentValue === "object" && documentValue !== null ? documentValue.name || documentValue.fileName || "Submitted document" : String(documentValue || "");
+}
+
+function documentStoredUrl(documentValue) {
+  if (typeof documentValue === "object" && documentValue !== null) return documentValue.url || documentValue.dataUrl || documentValue.publicUrl || "";
+  return "";
+}
+
+function isOpenableDocument(value) {
+  return /^(https?:|blob:|data:)/i.test(String(value || ""));
+}
+
+function documentUrlFor(user, documentValue) {
+  const documentName = documentDisplayName(documentValue);
+  const storedUrl = documentStoredUrl(documentValue);
+  return storedUrl || state.documentUrls?.[user.id]?.[documentName] || (isOpenableDocument(documentName) ? documentName : "");
+}
+
+function documentLinks(user) {
+  const docs = requestDocuments(user);
+  if (!docs.length) return "No documents uploaded";
+  return docs.map(documentValue => {
+    const documentName = documentDisplayName(documentValue);
+    const directUrl = typeof documentValue === "string" && isOpenableDocument(documentValue) ? documentUrlFor(user, documentValue) : "";
+    const documentId = typeof documentValue === "object" && documentValue !== null ? documentValue.id || "" : "";
+    return `<button class="document-link" data-action="open-document" data-id="${user.id}" data-document-id="${escapeHtml(documentId)}" data-doc="${escapeHtml(documentName)}" data-url="${escapeHtml(directUrl)}">View Documents</button><span class="document-name">${escapeHtml(documentName)}</span>`;
+  }).join("");
+}
+
+function maskingInfoRows(user) {
+  const request = user.maskingRequest || {};
+  return [
+    ["User", escapeHtml(user.name)],
+    ["Company", escapeHtml(request.companyName || user.company)],
+    ["Company type", escapeHtml(request.companyType || user.companyType || "Not submitted")],
+    ["Company phone", escapeHtml(request.phone || "Not submitted")],
+    ["Company email", escapeHtml(request.email || "Not submitted")],
+    ["Website", escapeHtml(request.website || "No website submitted")],
+    ["Address", escapeHtml(user.address || "Not submitted")],
+    ["BIN / TIN", escapeHtml(request.binTax || user.binTax || "Not submitted")],
+    ["Masking status", badge(user.maskingStatus)],
+    ["Documents", documentLinks(user)],
+    ["Admin note", escapeHtml(request.note || "No note")]
+  ];
+}
+
+function maskingDetailModal(user) {
+  const request = user.maskingRequest || {};
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="detail-modal" role="dialog" aria-modal="true" aria-labelledby="masking-detail-title">
+        <button class="modal-close" data-action="close-modal" aria-label="Close popup">×</button>
+        <div class="modal-head">
+          <div>
+            <p class="eyebrow">Masking Approval Request</p>
+            <h2 id="masking-detail-title">${escapeHtml(request.companyName || user.company)}</h2>
+            <p class="hint">${escapeHtml(user.name)} · ${escapeHtml(request.email || "No company email")}</p>
+          </div>
+          ${badge(user.maskingStatus)}
+        </div>
+        <div class="modal-summary-grid">
+          <span><small>Company phone</small><strong>${escapeHtml(request.phone || "Missing")}</strong></span>
+          <span><small>BIN/TIN</small><strong>${escapeHtml(request.binTax || user.binTax || "Missing")}</strong></span>
+          <span><small>Documents</small><strong>${requestDocuments(user).length} file(s)</strong></span>
+        </div>
+        <div class="modal-table-wrap">
+          <table class="detail-table">
+            <tbody>
+              ${maskingInfoRows(user).map(([label, value]) => `
+                <tr>
+                  <th>${escapeHtml(label)}</th>
+                  <td>${value}</td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+function renderModal() {
+  let host = document.querySelector("#modal-root");
+  if (!host) {
+    host = document.createElement("div");
+    host.id = "modal-root";
+    document.body.appendChild(host);
+  }
+  if (!state.modal) {
+    host.innerHTML = "";
+    return;
+  }
+  if (state.modal.type === "user") {
+    const user = state.users.find(item => item.id === state.modal.id);
+    host.innerHTML = user ? userDetailModal(user) : "";
+  }
+  if (state.modal.type === "masking") {
+    const user = state.users.find(item => item.id === state.modal.id);
+    host.innerHTML = user ? maskingDetailModal(user) : "";
+  }
+}
+
+function adminAccountSettings() {
+  const profile = state.adminProfile || {};
+  return `
+    <div class="form admin-settings-form">
+      <div class="grid two">
+        <div class="field"><label>Admin name</label><input id="admin-profile-name" value="${escapeHtml(profile.name || "")}" /></div>
+        <div class="field"><label>Company</label><input id="admin-profile-company" value="${escapeHtml(profile.company || "")}" /></div>
+      </div>
+      <div class="grid two">
+        <div class="field"><label>Admin email</label><input id="admin-profile-email" value="${escapeHtml(profile.email || "")}" /></div>
+        <div class="field"><label>Phone</label><input id="admin-profile-phone" value="${escapeHtml(profile.phone || "")}" /></div>
+      </div>
+      <div class="grid two">
+        <div class="field"><label>New password</label><input id="admin-profile-password" type="password" value="${escapeHtml(profile.newPassword || "")}" placeholder="Leave blank to keep current password" /></div>
+        <div class="field"><label>Confirm new password</label><input id="admin-profile-confirm" type="password" value="${escapeHtml(profile.confirmPassword || "")}" /></div>
+      </div>
+      <div class="button-row"><button class="primary" data-action="save-admin-profile">Save admin account</button></div>
+    </div>
   `;
 }
 
@@ -704,18 +1319,19 @@ function accountApprovalCards(rows) {
         <div><h3>${escapeHtml(user.company)}</h3><p class="hint">${escapeHtml(user.name)} · ${escapeHtml(user.companyType)}</p></div>
         ${badge(user.accountStatus)}
       </div>
-      <div class="package-stats">
+      <div class="package-stats approval-stats">
         <span><small>Email</small><strong>${escapeHtml(user.email)}</strong></span>
         <span><small>Phone</small><strong>${escapeHtml(user.phone)}</strong></span>
         <span><small>Balance</small><strong>${taka(user.balance)}</strong></span>
       </div>
       <p class="hint">${escapeHtml(user.address || "No address submitted")}</p>
-      <div class="row"><button class="secondary" data-action="view-account" data-id="${user.id}">View</button><button class="primary" data-action="approve-account" data-id="${user.id}">Approve account</button></div>
+      <div class="button-row"><button class="secondary" data-action="view-account" data-id="${user.id}">View</button><button class="primary" data-action="approve-account" data-id="${user.id}">Approve account</button></div>
     </article>
   `).join("")}</div>`;
 }
 
 function quick() {
+  if (!userCanUseMasking() && state.quickType === "masking") state.quickType = "transactional";
   const selectedContacts = state.quickMode === "audience" ? optedInContacts(state.quickAudienceId) : [];
   const recipients = state.quickMode === "audience" ? selectedContacts.length : 1;
   const info = smsInfo(state.quickText, state.quickType);
@@ -731,7 +1347,7 @@ function quick() {
           <div class="grid three">
             <div class="field"><label>Send mode</label><select id="quick-mode"><option value="single" ${state.quickMode === "single" ? "selected" : ""}>Single recipient</option><option value="audience" ${state.quickMode === "audience" ? "selected" : ""}>Audience list</option></select></div>
             <div class="field"><label>Channel</label><select id="quick-channel"><option value="sms" ${state.quickChannel === "sms" ? "selected" : ""}>SMS</option><option value="email" ${state.quickChannel === "email" ? "selected" : ""}>Email</option></select></div>
-            <div class="field"><label>SMS type</label><select id="quick-type">${["otp", "transactional", "promotional", "masking", "non-masking"].map(v => `<option value="${v}" ${state.quickType === v ? "selected" : ""}>${v}</option>`).join("")}</select></div>
+            <div class="field"><label>SMS type</label><select id="quick-type">${smsTypeOptions(state.quickType)}</select>${userCanUseMasking() ? "" : `<span class="hint">Masking SMS is locked until admin approves your masking request.</span>`}</div>
           </div>
           ${state.quickMode === "single" ? `
             <div class="grid two">
@@ -772,6 +1388,7 @@ function quick() {
 }
 
 function campaigns() {
+  if (!userCanUseMasking() && state.campaignType === "masking") state.campaignType = "transactional";
   const recipients = optedInContacts(state.campaignAudienceId).length;
   const info = smsInfo(state.smsText, state.campaignType);
   return `
@@ -780,7 +1397,7 @@ function campaigns() {
         <h2>Create Campaign</h2>
         <div class="form">
           <div class="grid three">
-            <div class="field"><label>Campaign type</label><select id="campaign-type">${["transactional", "promotional", "otp", "masking", "non-masking"].map(v => `<option value="${v}" ${state.campaignType === v ? "selected" : ""}>${v}</option>`).join("")}</select></div>
+            <div class="field"><label>Campaign type</label><select id="campaign-type">${smsTypeOptions(state.campaignType)}</select>${userCanUseMasking() ? "" : `<span class="hint">Masking campaigns are locked until admin approval.</span>`}</div>
             <div class="field"><label>Sender ID</label><input id="sender-id" value="${escapeHtml(state.senderId)}" maxlength="11" /></div>
             <div class="field"><label>Audience</label><select id="campaign-audience">${audienceOptions(state.campaignAudienceId)}</select><span class="hint">${recipients} opted-in recipient(s)</span></div>
           </div>
@@ -860,11 +1477,11 @@ function contacts() {
           <div class="field">
             <label>Upload Google Sheet export</label>
             <label class="file-drop" for="google-sheet-file">
-              <strong>Choose Google Sheet CSV/TSV</strong>
+              <strong>Choose Google Sheet CSV/XLSX</strong>
               <span>${state.googleSheetFileName ? escapeHtml(state.googleSheetFileName) : "No file selected yet"}</span>
             </label>
-            <input id="google-sheet-file" class="file-input-hidden" type="file" accept=".csv,.tsv,text/csv,text/tab-separated-values" />
-            <span class="hint">Download your Google Sheet as CSV/TSV with columns: name, phone, email. Then upload it here.</span>
+            <input id="google-sheet-file" class="file-input-hidden" type="file" accept=".csv,.tsv,.xlsx,text/csv,text/tab-separated-values,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" />
+            <span class="hint">Upload a CSV or XLSX export with columns: name, phone, email.</span>
           </div>
           <div class="check"><span class="dot"></span><div><strong>Loaded file</strong><p class="hint">${state.googleSheetFileName ? `${escapeHtml(state.googleSheetFileName)} · ${state.googleSheetRows.length} valid contact(s) ready` : "No Google Sheet file loaded yet."}</p></div></div>
           <button class="secondary" data-action="import-google-sheet">Import Google Sheet contacts</button>
@@ -997,16 +1614,20 @@ function userPackages() {
     <section class="panel">
       <h2>Buy SMS Package</h2>
       <p class="hint">Submit bKash/Nagad transaction ID. Admin approves the payment and credits your wallet.</p>
-      <div class="grid three">${state.packages.map(pkg => `
+      <div class="grid three">${state.packages.map(pkg => {
+        const locked = state.mode === "user" && pkg.type === "masking" && currentUser().maskingStatus !== "Approved";
+        return `
         <article class="panel">
           <h2>${escapeHtml(pkg.name)}</h2>
           <p class="hint">Adds ${taka(pkg.price)} to wallet after admin completion</p>
           <p>${badge(packageTypeLabel(pkg.type))}</p>
           <h1>${taka(pkg.price)}</h1>
           <p class="hint">${taka(pkg.rate)} per SMS</p>
-          <div class="row"><button class="primary" data-action="buy-package" data-id="${pkg.id}" data-method="bKash">Pay bKash</button><button class="secondary" data-action="buy-package" data-id="${pkg.id}" data-method="Nagad">Pay Nagad</button></div>
+          ${locked ? `<p class="hint">Masking approval required before buying this package.</p>` : ""}
+          <div class="row"><button class="primary" data-action="buy-package" data-id="${pkg.id}" data-method="bKash" ${locked ? "disabled" : ""}>Pay bKash</button><button class="secondary" data-action="buy-package" data-id="${pkg.id}" data-method="Nagad" ${locked ? "disabled" : ""}>Pay Nagad</button></div>
         </article>
-      `).join("")}</div>
+      `;
+      }).join("")}</div>
     </section>
   `;
 }
@@ -1083,19 +1704,19 @@ function orders() {
   const selectedOrder = state.payments.find(payment => payment.id === state.selectedOrderId) || activeOrders[0] || state.payments[0];
   if (selectedOrder && state.selectedOrderId !== selectedOrder.id) state.selectedOrderId = selectedOrder.id;
   return `
-    <div class="grid two">
-      <section class="panel">
-        <div class="between"><h2>New Orders</h2>${badge(`${activeOrders.length} active`)}</div>
+    <div class="admin-split orders-layout">
+      <section class="panel admin-panel">
+        <div class="panel-head"><div><h2>New Orders</h2><p class="hint">Approve after matching the customer transaction with received money.</p></div>${badge(`${activeOrders.length} active`)}</div>
         <p class="hint">When a customer buys a package, it appears here. Approve only after you verify the bKash/Nagad transaction and received money.</p>
         ${orderTable(activeOrders, true)}
       </section>
-      <section class="panel">
-        <h2>Order Details</h2>
+      <section class="panel admin-panel detail-panel">
+        <div class="panel-head"><div><h2>Order Details</h2><p class="hint">Selected payment request and wallet-credit status.</p></div></div>
         ${selectedOrder ? orderDetails(selectedOrder) : `<p class="hint">Select an order to view details.</p>`}
       </section>
     </div>
-    <section class="panel" style="margin-top:16px">
-      <h2>Processed Orders</h2>
+    <section class="panel admin-panel" style="margin-top:16px">
+      <div class="panel-head"><div><h2>Processed Orders</h2><p class="hint">Completed, cancelled, and already reviewed package orders.</p></div>${badge(`${completed.length} processed`)}</div>
       ${orderTable(completed, true)}
     </section>
   `;
@@ -1104,23 +1725,24 @@ function orders() {
 function orderTable(rows, actionable) {
   if (!rows.length) return `<p class="hint">No orders found.</p>`;
   return `
-    <table>
-      <thead><tr><th>Customer</th><th>Package</th><th>Type</th><th>Method</th><th>TRX</th><th>Amount</th><th>Status</th><th>Actions</th></tr></thead>
-      <tbody>${rows.map(payment => {
+    <div class="table-shell">
+      <table class="data-table order-table">
+        <thead><tr><th>Customer</th><th>Package</th><th>Type</th><th>Payment</th><th>Amount</th><th>Status</th><th>Actions</th></tr></thead>
+        <tbody>${rows.map(payment => {
         const user = state.users.find(item => item.id === payment.userId);
         const pkg = state.packages.find(item => item.id === payment.packageId);
         return `<tr>
-          <td>${escapeHtml(user?.name)}</td>
-          <td>${escapeHtml(pkg?.name || "Deleted package")}</td>
+          <td><strong>${escapeHtml(user?.name || "Unknown")}</strong><span class="cell-sub">${escapeHtml(user?.email || user?.company || "")}</span></td>
+          <td><strong>${escapeHtml(pkg?.name || "Deleted package")}</strong><span class="cell-sub">${escapeHtml(payment.id)}</span></td>
           <td>${pkg ? badge(packageTypeLabel(pkg.type)) : badge("Unknown")}</td>
-          <td>${escapeHtml(payment.method)}</td>
-          <td>${escapeHtml(payment.trx)}</td>
+          <td><strong>${escapeHtml(payment.method)}</strong><span class="cell-sub">TRX ${escapeHtml(payment.trx)}</span></td>
           <td>${taka(payment.amount)}</td>
           <td>${badge(payment.status)}</td>
-          <td><div class="row"><button class="secondary" data-action="view-order" data-id="${payment.id}">View</button><button class="secondary" data-action="edit-order" data-id="${payment.id}">Edit</button>${["Pending", "Processing"].includes(payment.status) ? `<button class="primary" data-action="approve-payment" data-id="${payment.id}">Complete</button>` : ""}</div></td>
+          <td><div class="action-stack"><button class="secondary" data-action="view-order" data-id="${payment.id}">View</button><button class="secondary" data-action="edit-order" data-id="${payment.id}">Edit</button>${["Pending", "Processing"].includes(payment.status) ? `<button class="primary" data-action="approve-payment" data-id="${payment.id}">Complete</button>` : ""}</div></td>
         </tr>`;
       }).join("")}</tbody>
-    </table>
+      </table>
+    </div>
   `;
 }
 
@@ -1145,17 +1767,17 @@ function orderDetails(payment) {
             <div class="field"><label>Amount</label><input id="order-edit-amount" inputmode="numeric" value="${state.orderDraft.amount}" /></div>
           </div>
           <div class="field"><label>Admin note</label><input id="order-edit-note" value="${escapeHtml(state.orderDraft.note || "")}" /></div>
-          <div class="row"><button class="primary" data-action="save-order" data-id="${payment.id}">Save order</button><button class="secondary" data-action="cancel-order-edit">Cancel</button></div>
-        </div>
-      ` : `
-        <ul class="checklist">
+        <div class="button-row"><button class="primary" data-action="save-order" data-id="${payment.id}">Save order</button><button class="secondary" data-action="cancel-order-edit">Cancel</button></div>
+      </div>
+    ` : `
+        <ul class="checklist order-info-list">
           <li class="check"><span class="dot"></span><div><strong>Customer</strong><p class="hint">${escapeHtml(user?.name)} · ${escapeHtml(user?.email)} · ${escapeHtml(user?.phone)}</p></div></li>
-        <li class="check"><span class="dot"></span><div><strong>Package</strong><p class="hint">${escapeHtml(pkg?.name || "Deleted package")} · ${pkg ? packageTypeLabel(pkg.type) : "Unknown"} · wallet credit ${pkg ? taka(pkg.price) : taka(0)}</p></div></li>
+          <li class="check"><span class="dot"></span><div><strong>Package</strong><p class="hint">${escapeHtml(pkg?.name || "Deleted package")} · ${pkg ? packageTypeLabel(pkg.type) : "Unknown"} · wallet credit ${pkg ? taka(pkg.price) : taka(0)}</p></div></li>
           <li class="check"><span class="dot"></span><div><strong>Payment</strong><p class="hint">${escapeHtml(payment.method)} · TRX ${escapeHtml(payment.trx)} · ${taka(payment.amount)}</p></div></li>
           <li class="check"><span class="dot ${payment.credited ? "" : "warn"}"></span><div><strong>Wallet credit</strong><p class="hint">${payment.credited ? "Already credited to customer wallet." : willCredit ? "Will credit when status is completed." : "Not credited yet."}</p></div></li>
           <li class="check"><span class="dot"></span><div><strong>Admin note</strong><p class="hint">${escapeHtml(payment.note || "No note")}</p></div></li>
         </ul>
-        <div class="row" style="margin-top:12px"><button class="secondary" data-action="edit-order" data-id="${payment.id}">Edit order</button>${!payment.credited ? `<button class="primary" data-action="approve-payment" data-id="${payment.id}">Complete and credit</button>` : ""}</div>
+        <div class="button-row" style="margin-top:14px"><button class="secondary" data-action="edit-order" data-id="${payment.id}">Edit order</button>${!payment.credited ? `<button class="primary" data-action="approve-payment" data-id="${payment.id}">Complete and credit</button>` : ""}</div>
       `}
     </div>
   `;
@@ -1256,6 +1878,7 @@ function render() {
     document.querySelector("#page-title").textContent = publicTitle();
     document.querySelector(".top-actions").innerHTML = publicActions();
     document.querySelector("#view").innerHTML = publicView();
+    renderModal();
     return;
   }
   document.querySelector(".top-actions").innerHTML = `<span class="badge info">${state.sessionRole === "admin" ? "Admin Portal" : "User Portal"}</span><button class="icon-button" title="Notifications">!</button><button class="primary" data-action="new-campaign">Quick SMS</button><button class="secondary" data-action="logout">Logout</button>`;
@@ -1263,8 +1886,9 @@ function render() {
   renderModeSwitch();
   renderNav();
   document.querySelector("#page-title").textContent = titleFor(state.active);
-  const views = { dashboard, profile, masking, approvals, users, packages, orders, payments, quick, campaigns, contacts, billing, otp, compliance };
+  const views = { dashboard, profile, masking, approvals, users, packages, orders, payments, quick, campaigns, contacts, billing, otp, compliance, "admin-profile": adminProfile };
   document.querySelector("#view").innerHTML = views[state.active]();
+  renderModal();
 }
 
 function toast(message, type = "info") {
@@ -1294,18 +1918,132 @@ function creditOrder(payment) {
 }
 
 function parseContactSheet(text, audienceId) {
-  const lines = String(text || "").split(/\r?\n/).filter(Boolean);
-  const body = lines[0]?.toLowerCase().includes("name") ? lines.slice(1) : lines;
-  return body.map(row => {
+  const rows = String(text || "").split(/\r?\n/).filter(Boolean).map(row => {
     const delimiter = row.includes("\t") ? "\t" : ",";
-    const [name, rawPhone, email] = row.split(delimiter).map(cell => String(cell || "").trim().replace(/^"|"$/g, ""));
+    return row.split(delimiter).map(cell => String(cell || "").trim().replace(/^"|"$/g, ""));
+  });
+  return parseContactRows(rows, audienceId);
+}
+
+function parseContactRows(rows, audienceId) {
+  const cleanRows = rows.map(row => row.map(cell => String(cell || "").trim())).filter(row => row.some(Boolean));
+  const headers = cleanRows[0]?.map(cell => cell.toLowerCase()) || [];
+  const hasHeader = headers.some(cell => ["name", "phone", "mobile", "email"].includes(cell));
+  const body = hasHeader ? cleanRows.slice(1) : cleanRows;
+  const column = key => {
+    const candidates = {
+      name: ["name", "customer", "customer name", "full name"],
+      phone: ["phone", "mobile", "number", "phone number", "mobile number"],
+      email: ["email", "email address"]
+    }[key];
+    const index = headers.findIndex(header => candidates.includes(header));
+    return index >= 0 ? index : { name: 0, phone: 1, email: 2 }[key];
+  };
+  const nameIndex = column("name");
+  const phoneIndex = column("phone");
+  const emailIndex = column("email");
+  return body.map(row => {
+    const name = row[nameIndex];
+    const rawPhone = row[phoneIndex];
+    const email = row[emailIndex];
     const phone = normalizeBdPhone(rawPhone);
     if (!name || !/^01[3-9]\d{8}$/.test(phone)) return null;
     return { id: `c${Date.now()}${Math.random()}`, name, phone, email, audienceId, consent: "Opted in", operator: operatorFromPhone(phone) };
   }).filter(Boolean);
 }
 
-document.addEventListener("click", event => {
+async function parseXlsxContacts(file, audienceId) {
+  const entries = await unzipXlsx(await file.arrayBuffer());
+  const sheetXml = await zipText(entries, "xl/worksheets/sheet1.xml");
+  if (!sheetXml) throw new Error("Could not find first worksheet in XLSX.");
+  const sharedXml = await zipText(entries, "xl/sharedStrings.xml");
+  const sharedStrings = sharedXml ? Array.from(new DOMParser().parseFromString(sharedXml, "application/xml").querySelectorAll("si")).map(si => si.textContent || "") : [];
+  const sheet = new DOMParser().parseFromString(sheetXml, "application/xml");
+  const rows = Array.from(sheet.querySelectorAll("sheetData row")).map(row => {
+    const cells = [];
+    row.querySelectorAll("c").forEach(cell => {
+      const ref = cell.getAttribute("r") || "";
+      const letters = ref.replace(/\d/g, "") || "A";
+      const index = letters.split("").reduce((sum, char) => sum * 26 + char.charCodeAt(0) - 64, 0) - 1;
+      const type = cell.getAttribute("t");
+      const raw = cell.querySelector("v")?.textContent || cell.textContent || "";
+      cells[index] = type === "s" ? sharedStrings[Number(raw)] || "" : raw;
+    });
+    return cells;
+  });
+  return parseContactRows(rows, audienceId);
+}
+
+async function zipText(entries, name) {
+  const entry = entries.find(item => item.name === name);
+  return entry ? new TextDecoder().decode(await inflateZipEntry(entry)) : "";
+}
+
+async function unzipXlsx(buffer) {
+  const view = new DataView(buffer);
+  let eocd = -1;
+  for (let offset = view.byteLength - 22; offset >= 0; offset--) {
+    if (view.getUint32(offset, true) === 0x06054b50) {
+      eocd = offset;
+      break;
+    }
+  }
+  if (eocd < 0) throw new Error("Invalid XLSX file.");
+  const entryCount = view.getUint16(eocd + 10, true);
+  let offset = view.getUint32(eocd + 16, true);
+  const decoder = new TextDecoder();
+  const entries = [];
+  for (let i = 0; i < entryCount; i++) {
+    if (view.getUint32(offset, true) !== 0x02014b50) break;
+    const method = view.getUint16(offset + 10, true);
+    const compressedSize = view.getUint32(offset + 20, true);
+    const fileNameLength = view.getUint16(offset + 28, true);
+    const extraLength = view.getUint16(offset + 30, true);
+    const commentLength = view.getUint16(offset + 32, true);
+    const localOffset = view.getUint32(offset + 42, true);
+    const name = decoder.decode(new Uint8Array(buffer, offset + 46, fileNameLength));
+    const localNameLength = view.getUint16(localOffset + 26, true);
+    const localExtraLength = view.getUint16(localOffset + 28, true);
+    const dataStart = localOffset + 30 + localNameLength + localExtraLength;
+    entries.push({ name, method, bytes: buffer.slice(dataStart, dataStart + compressedSize) });
+    offset += 46 + fileNameLength + extraLength + commentLength;
+  }
+  return entries;
+}
+
+async function inflateZipEntry(entry) {
+  if (entry.method === 0) return entry.bytes;
+  if (entry.method !== 8 || typeof DecompressionStream === "undefined") throw new Error("This browser cannot read compressed XLSX files.");
+  const stream = new Blob([entry.bytes]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+  return await new Response(stream).arrayBuffer();
+}
+
+function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error(`Could not read ${file.name}`));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function uploadMaskingDocument(file, userId) {
+  const dataUrl = await fileToDataUrl(file);
+  const payload = await apiRequest("/api/app/masking-document", {
+    method: "POST",
+    body: JSON.stringify({
+      userId,
+      maskingRequestId: `mr-${userId}`,
+      fileName: file.name,
+      fileType: file.type || "application/octet-stream",
+      size: file.size,
+      dataUrl
+    })
+  });
+  return payload.document;
+}
+
+document.addEventListener("click", async event => {
   const auth = event.target.closest("[data-auth]")?.dataset.auth;
   if (auth) {
     state.authView = auth;
@@ -1324,6 +2062,7 @@ document.addEventListener("click", event => {
   const view = event.target.closest("[data-view]")?.dataset.view;
   if (view) {
     state.active = view;
+    state.modal = null;
     render();
     return;
   }
@@ -1331,8 +2070,18 @@ document.addEventListener("click", event => {
   const button = event.target.closest("[data-action]");
   const action = button?.dataset.action;
   if (!action) return;
+  let shouldPersist = true;
+
+  if (action === "close-modal") {
+    shouldPersist = false;
+    state.modal = null;
+    render();
+    return;
+  }
 
   if (action === "logout") {
+    shouldPersist = false;
+    clearSession();
     state.sessionRole = null;
     state.authView = "landing";
     render();
@@ -1340,62 +2089,98 @@ document.addEventListener("click", event => {
   }
 
   if (action === "user-login") {
-    const user = state.users.find(item => item.email.toLowerCase() === state.loginEmail.toLowerCase());
-    if (!user || !state.loginPassword) toast("Invalid user login.");
-    else {
-      state.sessionRole = "user";
+    shouldPersist = false;
+    try {
+      const payload = await apiRequest("/api/app/login", {
+        method: "POST",
+        body: JSON.stringify({ email: state.loginEmail, password: state.loginPassword, role: "user" })
+      });
+      state.sessionRole = payload.session.role;
       state.mode = "user";
-      state.currentUserId = user.id;
+      state.currentUserId = payload.session.userId;
+      await loadRemoteState(state.sessionRole, state.currentUserId);
+      saveSession();
       state.active = "dashboard";
-      toast(`Welcome ${user.company}.`);
+      toast(`Welcome ${currentUser().company}.`);
+      render();
+    } catch (error) {
+      toast(error.message || "Invalid user login.", "error");
     }
+    return;
   }
 
   if (action === "admin-login") {
-    if (state.adminEmail !== "admin@siddhisms.com" || state.adminPassword !== "admin123") toast("Invalid admin login.");
-    else {
-      state.sessionRole = "admin";
+    shouldPersist = false;
+    try {
+      const payload = await apiRequest("/api/app/login", {
+        method: "POST",
+        body: JSON.stringify({ email: state.adminEmail, password: state.adminPassword, role: "admin" })
+      });
+      state.sessionRole = payload.session.role;
       state.mode = "admin";
+      state.currentUserId = payload.session.userId;
+      await loadRemoteState(state.sessionRole, state.currentUserId);
+      saveSession();
       state.active = "dashboard";
       toast("Admin portal opened.");
+      render();
+    } catch (error) {
+      toast(error.message || "Invalid admin login.", "error");
     }
+    return;
   }
 
   if (action === "signup-submit") {
     const form = state.signup;
     if (!form.name.trim() || !form.company.trim() || !form.email.trim() || !form.phone.trim() || !form.password.trim()) toast("Name, company, email, phone and password required.");
-    else if (state.users.some(user => user.email.toLowerCase() === form.email.toLowerCase())) toast("This email already has an account.");
     else {
-      const id = `u${Date.now()}`;
-      state.users.push({
-        id,
-        name: form.name.trim(),
-        company: form.company.trim(),
-        email: form.email.trim(),
-        phone: form.phone.trim(),
-        address: form.address.trim(),
-        companyType: form.companyType,
-        avatar: form.avatar.trim() || initials(form.company),
-        plan: "Trial",
-        balance: 0,
-        status: "Pending approval",
-        accountStatus: "Pending",
-        maskingStatus: "Not applied",
-        binTax: "",
-        docs: ""
-      });
-      state.currentUserId = id;
-      state.sessionRole = "user";
-      state.mode = "user";
-      state.active = "dashboard";
-      state.signup = { name: "", company: "", email: "", phone: "", address: "", companyType: "E-commerce", password: "", avatar: "" };
-      toast("Account created and sent for admin approval.");
+      shouldPersist = false;
+      try {
+        const payload = await apiRequest("/api/app/signup", {
+          method: "POST",
+          body: JSON.stringify(form)
+        });
+        state.currentUserId = payload.session.userId;
+        state.sessionRole = "user";
+        state.mode = "user";
+        await loadRemoteState(state.sessionRole, state.currentUserId);
+        saveSession();
+        state.active = "dashboard";
+        state.signup = { name: "", company: "", email: "", phone: "", address: "", companyType: "E-commerce", password: "", avatar: "" };
+        toast("Account created and sent for admin approval.");
+        render();
+      } catch (error) {
+        toast(error.message || "Signup failed.", "error");
+      }
+      return;
     }
   }
 
   if (action === "forgot-submit") {
     const user = state.users.find(item => item.email.toLowerCase() === state.forgotEmail.toLowerCase());
     toast(user ? "Password reset request created. Admin can send reset email." : "Email not found.");
+  }
+
+  if (action === "reset-password-submit") {
+    shouldPersist = false;
+    if (!state.resetPassword || state.resetPassword.length < 6) toast("Password must be at least 6 characters.", "error");
+    else if (state.resetPassword !== state.resetPasswordConfirm) toast("Passwords do not match.", "error");
+    else {
+      try {
+        await apiRequest("/api/app/password-reset/complete", {
+          method: "POST",
+          body: JSON.stringify({ token: state.resetToken, password: state.resetPassword })
+        });
+        state.resetToken = "";
+        state.resetEmail = "";
+        state.resetPassword = "";
+        state.resetPasswordConfirm = "";
+        state.authView = "user-login";
+        toast("Password updated successfully. Please log in with your new password.", "success");
+      } catch (error) {
+        toast(error.message || "Password reset failed.", "error");
+      }
+    }
   }
 
   if (action === "new-campaign") state.active = "quick";
@@ -1423,7 +2208,7 @@ document.addEventListener("click", event => {
       user.email = request.email.trim();
       user.phone = request.phone.trim();
       user.binTax = request.binTax.trim();
-      user.docs = request.documents.join(", ");
+      user.docs = request.documents.map(documentDisplayName).join(", ");
       user.maskingStatus = "Pending";
       request.note = "Submitted for admin review";
       toast("Masking approval request submitted successfully.", "success");
@@ -1433,23 +2218,102 @@ document.addEventListener("click", event => {
   if (action === "approve-account") {
     const user = state.users.find(item => item.id === button.dataset.id);
     if (user) {
-      user.accountStatus = "Approved";
-      user.status = "Active";
-      toast(`${user.company} account approved.`);
+      shouldPersist = false;
+      try {
+        await apiRequest(`/api/admin/users/${encodeURIComponent(user.id)}/activate`, { method: "POST" });
+        await loadRemoteState(state.sessionRole, state.currentUserId);
+        toast(`${user.company} account approved and activated.`, "success");
+      } catch (error) {
+        toast(error.message || "Could not approve account.", "error");
+      }
+    }
+  }
+
+  if (action === "activate-account" || action === "deactivate-account") {
+    const user = state.users.find(item => item.id === button.dataset.id);
+    if (user) {
+      shouldPersist = false;
+      const apiAction = action === "activate-account" ? "activate" : "deactivate";
+      const confirmText = action === "deactivate-account"
+        ? `Deactivate ${user.company}? The user will be blocked from login until an admin activates the account.`
+        : `Activate ${user.company}? The user will regain access to the portal.`;
+      if (window.confirm(confirmText)) {
+        try {
+          await apiRequest(`/api/admin/users/${encodeURIComponent(user.id)}/${apiAction}`, { method: "POST" });
+          await loadRemoteState(state.sessionRole, state.currentUserId);
+          toast(action === "activate-account" ? `${user.company} is active again.` : `${user.company} has been suspended.`, action === "activate-account" ? "success" : "error");
+        } catch (error) {
+          toast(error.message || "Could not update account status.", "error");
+        }
+      }
+    }
+  }
+
+  if (action === "delete-account") {
+    const user = state.users.find(item => item.id === button.dataset.id);
+    if (user) {
+      shouldPersist = false;
+      if (window.confirm(`Permanently delete ${user.company}? This removes their profile and related demo data.`)) {
+        try {
+          await apiRequest(`/api/admin/users/${encodeURIComponent(user.id)}`, { method: "DELETE" });
+          await loadRemoteState(state.sessionRole, state.currentUserId);
+          toast(`${user.company} was deleted.`, "success");
+        } catch (error) {
+          toast(error.message || "Could not delete account.", "error");
+        }
+      }
     }
   }
 
   if (action === "view-account") {
     const user = state.users.find(item => item.id === button.dataset.id);
-    if (user) toast(`${user.company}: ${user.name}, ${user.email}, ${user.phone}, ${user.address || "No address"}.`);
+    if (user) {
+      shouldPersist = false;
+      state.modal = { type: "user", id: user.id };
+    }
   }
 
   if (action === "view-masking") {
     const user = state.users.find(item => item.id === button.dataset.id);
     if (user) {
-      const request = user.maskingRequest || {};
-      toast(`${request.companyName || user.company}: ${request.email || user.email}, ${request.phone || user.phone}, files: ${request.documents?.join(", ") || "No files"}.`, "info");
+      shouldPersist = false;
+      state.modal = { type: "masking", id: user.id };
     }
+  }
+
+  if (action === "open-document") {
+    shouldPersist = false;
+    const user = state.users.find(item => item.id === button.dataset.id);
+    const documentName = button.dataset.doc || "";
+    const documentId = button.dataset.documentId || "";
+    const directUrl = button.dataset.url || (user ? documentUrlFor(user, documentName) : "");
+    const opened = window.open("about:blank", "_blank");
+    const openUrl = value => {
+      const absoluteUrl = new URL(value, window.location.origin).href;
+      if (opened) opened.location.href = absoluteUrl;
+      else window.location.href = absoluteUrl;
+    };
+    if (directUrl) openUrl(directUrl);
+    else if (user && (documentId || documentName)) {
+      try {
+        const params = new URLSearchParams({
+          userId: user.id,
+          fileName: documentName,
+          documentId,
+          role: state.sessionRole || state.mode,
+          viewerId: state.currentUserId || ""
+        });
+        const payload = await apiRequest(`/api/app/masking-document/resolve?${params.toString()}`);
+        openUrl(payload.url);
+      } catch (error) {
+        if (opened) opened.close();
+        toast(error.message || "Saved document file not found. Please upload this document again.", "error");
+      }
+    } else {
+      if (opened) opened.close();
+      toast("Document file not found.", "error");
+    }
+    return;
   }
 
   if (action === "approve-masking") {
@@ -1472,7 +2336,35 @@ document.addEventListener("click", event => {
 
   if (action === "send-reset") {
     const user = state.users.find(item => item.id === button.dataset.id);
-    if (user) toast(`Password reset email queued for ${user.email}.`);
+    if (user) {
+      shouldPersist = false;
+      try {
+        const payload = await apiRequest(`/api/admin/users/${encodeURIComponent(user.id)}/password-reset`, { method: "POST" });
+        toast(`Password reset email queued for ${user.email}. Reset link: ${payload.reset.resetUrl}`, "success");
+      } catch (error) {
+        toast(error.message || "Could not create password reset link.", "error");
+      }
+    }
+  }
+
+  if (action === "save-admin-profile") {
+    shouldPersist = false;
+    const profile = state.adminProfile || {};
+    if (profile.newPassword && profile.newPassword !== profile.confirmPassword) toast("Admin passwords do not match.", "error");
+    else {
+      try {
+        const payload = await apiRequest("/api/admin/profile", {
+          method: "PUT",
+          body: JSON.stringify({ adminId: state.currentUserId, profile })
+        });
+        state.adminProfile = { ...payload.profile, newPassword: "", confirmPassword: "" };
+        state.adminEmail = payload.profile.email;
+        saveSession();
+        toast("Admin account updated. Use the updated email/password on next login.", "success");
+      } catch (error) {
+        toast(error.message || "Could not update admin account.", "error");
+      }
+    }
   }
 
   if (action === "create-audience") {
@@ -1506,7 +2398,7 @@ document.addEventListener("click", event => {
   }
 
   if (action === "import-google-sheet") {
-    if (!state.googleSheetRows.length) toast("Upload a Google Sheet CSV/TSV file first.");
+    if (!state.googleSheetRows.length) toast("Upload a Google Sheet CSV/XLSX file first.");
     else {
       state.contacts.push(...state.googleSheetRows.map(contact => ({ ...contact, audienceId: state.manualContact.audienceId })));
       toast(`${state.googleSheetRows.length} Google Sheet contact(s) imported.`);
@@ -1666,7 +2558,7 @@ document.addEventListener("click", event => {
     else if (wallet < cost) toast("Insufficient balance for this campaign.");
     else {
       deductWallet(cost);
-      state.campaigns.unshift({ name: `${audienceName(state.campaignAudienceId)} Campaign`, type: state.campaignType, audienceId: state.campaignAudienceId, sent: recipients, delivered: Math.max(0, recipients - 1), cost, status: "Queued" });
+      state.campaigns.unshift({ id: `camp${Date.now()}`, name: `${audienceName(state.campaignAudienceId)} Campaign`, type: state.campaignType, audienceId: state.campaignAudienceId, senderId: state.senderId, message: state.smsText, sent: recipients, delivered: Math.max(0, recipients - 1), cost, status: "Queued" });
       toast(`Campaign queued for ${recipients} recipient(s).`);
     }
   }
@@ -1756,6 +2648,11 @@ document.addEventListener("click", event => {
       return;
     }
     const pkg = state.packages.find(item => item.id === button.dataset.id);
+    if (state.mode === "user" && pkg?.type === "masking" && currentUser().maskingStatus !== "Approved") {
+      toast("Masking wallet packages are available only after admin approves your masking request.", "error");
+      render();
+      return;
+    }
     const method = button.dataset.method;
     const trx = `${method === "bKash" ? "BK" : "NG"}${Math.floor(100000 + Math.random() * 899999)}`;
     state.payments.unshift({ id: `pay${Date.now()}`, userId: currentUser().id, packageId: pkg.id, method, trx, amount: pkg.price, status: "Pending", credited: false, note: "New customer order" });
@@ -1824,6 +2721,7 @@ document.addEventListener("click", event => {
   }
 
   render();
+  if (shouldPersist) persistAppState();
 });
 
 document.addEventListener("input", event => {
@@ -1837,13 +2735,30 @@ document.addEventListener("input", event => {
   if (id === "login-password") state.loginPassword = event.target.value;
   if (id === "admin-email") state.adminEmail = event.target.value;
   if (id === "admin-password") state.adminPassword = event.target.value;
+  if (id === "admin-profile-name") state.adminProfile.name = event.target.value;
+  if (id === "admin-profile-company") state.adminProfile.company = event.target.value;
+  if (id === "admin-profile-email") state.adminProfile.email = event.target.value;
+  if (id === "admin-profile-phone") state.adminProfile.phone = event.target.value;
+  if (id === "admin-profile-password") state.adminProfile.newPassword = event.target.value;
+  if (id === "admin-profile-confirm") state.adminProfile.confirmPassword = event.target.value;
+  if (id === "user-search") {
+    const cursor = event.target.selectionStart;
+    state.userSearch = event.target.value;
+    render();
+    const search = document.querySelector("#user-search");
+    if (search) {
+      search.focus();
+      search.setSelectionRange(cursor, cursor);
+    }
+  }
+  if (id === "reset-password") state.resetPassword = event.target.value;
+  if (id === "reset-password-confirm") state.resetPasswordConfirm = event.target.value;
   if (id === "forgot-email") state.forgotEmail = event.target.value;
   if (id === "signup-name") state.signup.name = event.target.value;
   if (id === "signup-company") state.signup.company = event.target.value;
   if (id === "signup-email") state.signup.email = event.target.value;
   if (id === "signup-phone") state.signup.phone = event.target.value;
   if (id === "signup-address") state.signup.address = event.target.value;
-  if (id === "signup-avatar") state.signup.avatar = event.target.value.toUpperCase();
   if (id === "signup-password") state.signup.password = event.target.value;
   if (id === "profile-name") currentUser().name = event.target.value;
   if (id === "profile-company") currentUser().company = event.target.value;
@@ -1898,11 +2813,21 @@ document.addEventListener("change", event => {
   if (id === "google-sheet-file") {
     const file = event.target.files?.[0];
     if (!file) return;
+    const isXlsx = /\.xlsx$/i.test(file.name);
+    if (isXlsx) {
+      parseXlsxContacts(file, state.manualContact.audienceId).then(rows => {
+        state.googleSheetRows = rows;
+        state.googleSheetFileName = file.name;
+        toast(`${state.googleSheetRows.length} valid contact(s) loaded from XLSX.`);
+        render();
+      }).catch(error => toast(error.message, "error"));
+      return;
+    }
     const reader = new FileReader();
     reader.onload = () => {
       state.googleSheetRows = parseContactSheet(reader.result, state.manualContact.audienceId);
       state.googleSheetFileName = file.name;
-      toast(`${state.googleSheetRows.length} valid contact(s) loaded from Google Sheet.`);
+      toast(`${state.googleSheetRows.length} valid contact(s) loaded from CSV.`);
       render();
     };
     reader.readAsText(file);
@@ -1911,9 +2836,16 @@ document.addEventListener("change", event => {
   if (id === "mask-documents") {
     const user = currentUser();
     if (!user.maskingRequest) user.maskingRequest = { companyName: user.company || "", companyType: user.companyType || "E-commerce", otherCompanyType: "", binTax: "", website: "", email: user.email || "", phone: user.phone || "", documents: [], note: "" };
-    user.maskingRequest.documents = Array.from(event.target.files || []).map(file => file.name);
-    toast(`${user.maskingRequest.documents.length} document file(s) selected.`, user.maskingRequest.documents.length ? "success" : "error");
-    render();
+    const files = Array.from(event.target.files || []);
+    Object.values(state.documentUrls[user.id] || {}).forEach(url => {
+      if (String(url).startsWith("blob:")) URL.revokeObjectURL(url);
+    });
+    state.documentUrls[user.id] = Object.fromEntries(files.map(file => [file.name, URL.createObjectURL(file)]));
+    Promise.all(files.map(file => uploadMaskingDocument(file, user.id))).then(documents => {
+      user.maskingRequest.documents = documents;
+      toast(`${user.maskingRequest.documents.length} document file(s) uploaded and ready for admin review.`, user.maskingRequest.documents.length ? "success" : "error");
+      render();
+    }).catch(error => toast(error.message, "error"));
     return;
   }
   if (id === "quick-mode") state.quickMode = event.target.value;
@@ -1944,4 +2876,7 @@ document.addEventListener("change", event => {
   render();
 });
 
-render();
+openResetFromUrl().then(openedReset => {
+  if (!openedReset) restoreSession();
+  else render();
+});

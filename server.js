@@ -1,11 +1,42 @@
+try {
+  require("dotenv").config();
+} catch {
+  const fs = require("fs");
+  const path = require("path");
+  const envPath = path.join(__dirname, ".env");
+  if (fs.existsSync(envPath)) {
+    fs.readFileSync(envPath, "utf8").split(/\r?\n/).forEach(line => {
+      const match = line.match(/^\s*([\w.-]+)\s*=\s*(.*)?\s*$/);
+      if (!match || match[1].startsWith("#")) return;
+      const value = String(match[2] || "").replace(/^['"]|['"]$/g, "");
+      if (process.env[match[1]] === undefined) process.env[match[1]] = value;
+    });
+  }
+}
+
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+const { supabase, testSupabaseConnection } = require("./supabaseClient");
+const {
+  loginAppUser,
+  createCustomerAccount,
+  loadAppState,
+  saveAppState,
+  setUserControlStatus,
+  deleteCustomerAccount,
+  createPasswordReset,
+  verifyPasswordReset,
+  completePasswordReset,
+  updateAdminProfile
+} = require("./db");
 
 const PORT = Number(process.env.PORT || 8080);
 const DATA_FILE = path.join(__dirname, "data-store.json");
 const PUBLIC_DIR = __dirname;
+const UPLOAD_DIR = path.join(__dirname, "uploads", "masking-documents");
+const COMPANY_DOCUMENTS_BUCKET = "company-documents";
 const ADMIN_KEY = process.env.ADMIN_API_KEY || "admin_live_change_me";
 const CUSTOMER_API_KEY = process.env.CUSTOMER_API_KEY || "sk_live_demo_2026";
 const WEBHOOK_SECRET = process.env.PAYMENT_WEBHOOK_SECRET || "webhook_change_me";
@@ -50,7 +81,7 @@ function sendJson(res, status, body) {
     "Content-Type": "application/json",
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Headers": "Content-Type, Authorization, x-admin-key, x-webhook-secret",
-    "Access-Control-Allow-Methods": "GET, POST, PATCH, OPTIONS"
+    "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, OPTIONS"
   });
   res.end(JSON.stringify(body));
 }
@@ -60,7 +91,7 @@ function readBody(req) {
     let raw = "";
     req.on("data", chunk => {
       raw += chunk;
-      if (raw.length > 1_000_000) {
+      if (raw.length > 25_000_000) {
         req.destroy();
         reject(new Error("Payload too large"));
       }
@@ -74,6 +105,84 @@ function readBody(req) {
       }
     });
   });
+}
+
+function safeFileName(value) {
+  const cleaned = path.basename(String(value || "document").replace(/[^\w.\- ]+/g, "_")).trim();
+  return cleaned || "document";
+}
+
+let storageBucketReady = false;
+
+async function ensureCompanyDocumentsBucket() {
+  if (storageBucketReady) return;
+  const { error } = await supabase.storage.createBucket(COMPANY_DOCUMENTS_BUCKET, { public: false });
+  if (error && !/already exists|Duplicate/i.test(error.message || "")) throw error;
+  storageBucketReady = true;
+}
+
+async function uploadMaskingDocument(body) {
+  if (!body.userId || !body.fileName || !body.dataUrl) throw new Error("userId, fileName and dataUrl required");
+  const match = String(body.dataUrl).match(/^data:([^;]+);base64,(.+)$/);
+  if (!match) throw new Error("Invalid document data");
+  const [, mimeType, base64] = match;
+  const buffer = Buffer.from(base64, "base64");
+  if (!buffer.length) throw new Error("Empty document");
+  if (buffer.length > 12_000_000) throw new Error("Document file is too large");
+  await ensureCompanyDocumentsBucket();
+  const documentId = `doc-${crypto.randomUUID()}`;
+  const fileName = safeFileName(body.fileName);
+  const storagePath = `${safeFileName(body.userId)}/${Date.now()}-${fileName}`;
+  const upload = await supabase.storage
+    .from(COMPANY_DOCUMENTS_BUCKET)
+    .upload(storagePath, buffer, { contentType: body.fileType || mimeType, upsert: false });
+  if (upload.error) throw upload.error;
+  const signed = await supabase.storage.from(COMPANY_DOCUMENTS_BUCKET).createSignedUrl(storagePath, 60 * 10);
+  if (signed.error) throw signed.error;
+  const maskingRequestId = body.maskingRequestId || `mr-${body.userId}`;
+  const row = {
+    id: documentId,
+    user_id: body.userId,
+    masking_request_id: maskingRequestId,
+    file_name: fileName,
+    file_type: body.fileType || mimeType,
+    file_path: storagePath,
+    file_url: "",
+    status: "Submitted",
+    metadata: { size: Number(body.size || buffer.length), bucket: COMPANY_DOCUMENTS_BUCKET }
+  };
+  const dbResult = await supabase.from("documents").upsert(row, { onConflict: "id" });
+  if (dbResult.error) throw dbResult.error;
+  return {
+    id: documentId,
+    name: fileName,
+    type: row.file_type,
+    size: Number(body.size || buffer.length),
+    path: storagePath,
+    url: signed.data.signedUrl,
+    status: "Submitted"
+  };
+}
+
+async function resolveMaskingDocument({ userId, fileName, documentId, viewerRole, viewerId }) {
+  let query = supabase.from("documents").select("*");
+  if (documentId) query = query.eq("id", documentId);
+  else query = query.eq("user_id", userId).eq("file_name", fileName).order("created_at", { ascending: false });
+  const result = await query.limit(1).maybeSingle();
+  if (result.error) throw result.error;
+  const document = result.data;
+  if (!document) return null;
+  const isAdmin = viewerRole === "admin";
+  const isOwner = viewerId && viewerId === document.user_id;
+  if (!isAdmin && !isOwner) {
+    const error = new Error("Document access denied");
+    error.statusCode = 403;
+    throw error;
+  }
+  if (!document.file_path) return document.file_url || null;
+  const signed = await supabase.storage.from(COMPANY_DOCUMENTS_BUCKET).createSignedUrl(document.file_path, 60 * 10);
+  if (signed.error) throw signed.error;
+  return signed.data.signedUrl;
 }
 
 function requireAdmin(req, res) {
@@ -120,18 +229,33 @@ function creditOrder(store, order) {
 function publicFile(req, res) {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const cleanPath = url.pathname === "/" ? "/index.html" : url.pathname;
-  const filePath = path.normalize(path.join(PUBLIC_DIR, cleanPath));
+  const decodedPath = decodeURIComponent(cleanPath);
+  const filePath = path.normalize(path.join(PUBLIC_DIR, decodedPath));
   if (!filePath.startsWith(PUBLIC_DIR)) {
     res.writeHead(403);
     return res.end("Forbidden");
+  }
+  if (cleanPath === "/assets/siddhi-sms-logo.png") {
+    const localLogoCandidates = [
+      path.join(process.env.USERPROFILE || process.env.HOME || __dirname, "Downloads", "SiddhiSMS.png"),
+      "C:\\Users\\biswa\\Downloads\\SiddhiSMS.png"
+    ];
+    const localLogo = localLogoCandidates.find(candidate => fs.existsSync(candidate));
+    if (localLogo) {
+      res.writeHead(200, { "Content-Type": "image/png", "Cache-Control": "no-store" });
+      return fs.createReadStream(localLogo).pipe(res);
+    }
   }
   if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
     res.writeHead(404);
     return res.end("Not found");
   }
   const ext = path.extname(filePath);
-  const contentTypes = { ".html": "text/html", ".css": "text/css", ".js": "application/javascript", ".json": "application/json" };
-  res.writeHead(200, { "Content-Type": contentTypes[ext] || "application/octet-stream" });
+  const contentTypes = { ".html": "text/html", ".css": "text/css", ".js": "application/javascript", ".json": "application/json", ".pdf": "application/pdf", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".doc": "application/msword", ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document" };
+  res.writeHead(200, {
+    "Content-Type": contentTypes[ext] || "application/octet-stream",
+    "Content-Disposition": "inline"
+  });
   fs.createReadStream(filePath).pipe(res);
 }
 
@@ -163,6 +287,117 @@ async function api(req, res) {
   try {
     if (req.method === "GET" && url.pathname === "/api/health") {
       return sendJson(res, 200, { ok: true, service: "Siddhi SMS API", time: new Date().toISOString() });
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/health/supabase") {
+      await testSupabaseConnection();
+      return sendJson(res, 200, { ok: true, service: "Supabase", time: new Date().toISOString() });
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/app/login") {
+      const body = await readBody(req);
+      if (!body.email || !body.password) return sendJson(res, 400, { error: "email and password required" });
+      const account = await loginAppUser(body.email, body.password);
+      if (!account) return sendJson(res, 401, { error: "Invalid email or password" });
+      if (body.role && body.role !== account.role && !(body.role === "user" && account.role === "customer")) {
+        return sendJson(res, 403, { error: "This account does not have access to that portal" });
+      }
+      return sendJson(res, 200, {
+        user: account,
+        session: {
+          role: account.role === "admin" ? "admin" : "user",
+          userId: account.id
+        }
+      });
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/app/password-reset/verify") {
+      const token = url.searchParams.get("token");
+      if (!token) return sendJson(res, 400, { error: "token required" });
+      const reset = await verifyPasswordReset(token);
+      return sendJson(res, 200, { reset });
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/app/password-reset/complete") {
+      const body = await readBody(req);
+      if (!body.token || !body.password) return sendJson(res, 400, { error: "token and password required" });
+      const result = await completePasswordReset(body.token, body.password);
+      return sendJson(res, 200, result);
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/app/signup") {
+      const body = await readBody(req);
+      if (!body.name || !body.company || !body.email || !body.phone || !body.password) {
+        return sendJson(res, 400, { error: "name, company, email, phone and password required" });
+      }
+      const account = await createCustomerAccount(body);
+      return sendJson(res, 201, {
+        user: account,
+        session: { role: "user", userId: account.id },
+        message: "Signup created. Admin approval required."
+      });
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/app/masking-document") {
+      const body = await readBody(req);
+      const document = await uploadMaskingDocument(body);
+      return sendJson(res, 201, { document });
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/app/masking-document/resolve") {
+      const userId = url.searchParams.get("userId");
+      const fileName = url.searchParams.get("fileName");
+      const documentId = url.searchParams.get("documentId");
+      const viewerRole = url.searchParams.get("role");
+      const viewerId = url.searchParams.get("viewerId");
+      if (!documentId && (!userId || !fileName)) return sendJson(res, 400, { error: "documentId or userId and fileName required" });
+      const documentUrl = await resolveMaskingDocument({ userId, fileName, documentId, viewerRole, viewerId });
+      if (!documentUrl) return sendJson(res, 404, { error: "Saved document file not found. Please ask the user to upload this document again." });
+      return sendJson(res, 200, { url: documentUrl });
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/app/state") {
+      const role = url.searchParams.get("role");
+      const userId = url.searchParams.get("userId");
+      if (!role || !userId) return sendJson(res, 400, { error: "role and userId required" });
+      const state = await loadAppState({ role, userId });
+      return sendJson(res, 200, { state });
+    }
+
+    if (req.method === "PUT" && url.pathname === "/api/app/state") {
+      const body = await readBody(req);
+      if (!body.role || !body.userId || !body.state) return sendJson(res, 400, { error: "role, userId and state required" });
+      await saveAppState({ role: body.role, userId: body.userId, state: body.state });
+      return sendJson(res, 200, { ok: true, time: new Date().toISOString() });
+    }
+
+    const userControlMatch = url.pathname.match(/^\/api\/admin\/users\/([^/]+)\/(activate|deactivate|password-reset)$/);
+    if (req.method === "POST" && userControlMatch) {
+      const [, userId, action] = userControlMatch;
+      if (action === "password-reset") {
+        const baseUrl = process.env.PUBLIC_BASE_URL || `http://localhost:${PORT}`;
+        const reset = await createPasswordReset(userId, baseUrl);
+        return sendJson(res, 200, {
+          ok: true,
+          message: `Password reset email queued for ${reset.email}.`,
+          reset
+        });
+      }
+      const user = await setUserControlStatus(userId, action);
+      return sendJson(res, 200, { ok: true, user });
+    }
+
+    const deleteUserMatch = url.pathname.match(/^\/api\/admin\/users\/([^/]+)$/);
+    if (req.method === "DELETE" && deleteUserMatch) {
+      const deleted = await deleteCustomerAccount(deleteUserMatch[1]);
+      return sendJson(res, 200, { ok: true, deleted });
+    }
+
+    if (req.method === "PUT" && url.pathname === "/api/admin/profile") {
+      const body = await readBody(req);
+      if (!body.adminId || !body.profile) return sendJson(res, 400, { error: "adminId and profile required" });
+      const profile = await updateAdminProfile(body.adminId, body.profile);
+      return sendJson(res, 200, { ok: true, profile });
     }
 
     if (req.method === "GET" && url.pathname === "/api/packages") {
@@ -252,6 +487,15 @@ async function api(req, res) {
 
     return sendJson(res, 404, { error: "API route not found" });
   } catch (error) {
+    if (error.code === "ACCOUNT_SUSPENDED") {
+      return sendJson(res, 403, { code: "ACCOUNT_SUSPENDED", error: error.message });
+    }
+    if (/schema cache|Could not find the table|Could not find the function/i.test(error.message)) {
+      return sendJson(res, 400, {
+        error: `${error.message}. Apply supabase/001_schema.sql and supabase/002_seed_demo.sql in your Supabase SQL editor, then try again.`
+      });
+    }
+    if (error.statusCode) return sendJson(res, error.statusCode, { error: error.message });
     return sendJson(res, 400, { error: error.message });
   }
 }
