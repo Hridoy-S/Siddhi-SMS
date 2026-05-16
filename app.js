@@ -666,7 +666,7 @@ function authExperience(activeTab, formMarkup, headline = "আপনার ব�
       <div class="auth-shell">
         <aside class="auth-brand-panel">
           <div class="auth-logo-wrap">
-            <img src="assets/siddhi-sms-logo.png" alt="Siddhi SMS logo" />
+            <img src="assets/siddhi-sms-logo-login.png" alt="Siddhi SMS logo" />
           </div>
           <h2><span class="brand-siddhi">Siddhi</span> <span class="brand-sms">SMS</span></h2>
           <p class="auth-subtitle">স্মার্ট এসএমএস সল্যুশন</p>
