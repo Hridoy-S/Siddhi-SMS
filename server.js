@@ -228,7 +228,7 @@ function creditOrder(store, order) {
 
 function publicFile(req, res) {
   const url = new URL(req.url, `http://${req.headers.host}`);
-  const cleanPath = url.pathname === "/" ? "/index.html" : url.pathname;
+  const cleanPath = url.pathname === "/" || url.pathname === "/admin-secure-login" ? "/index.html" : url.pathname;
   const decodedPath = decodeURIComponent(cleanPath);
   const filePath = path.normalize(path.join(PUBLIC_DIR, decodedPath));
   if (!filePath.startsWith(PUBLIC_DIR)) {
