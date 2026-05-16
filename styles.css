@@ -639,7 +639,7 @@ body.public .shell {
 .auth-stage {
   position: relative;
   min-height: 100vh;
-  padding: clamp(24px, 5vh, 56px) 4vw 28px;
+  padding: 8vh 4vw 36px;
   overflow: hidden;
 }
 
@@ -696,7 +696,7 @@ body.public .shell {
   position: relative;
   z-index: 1;
   max-width: 1180px;
-  min-height: min(760px, calc(100vh - 120px));
+  min-height: 760px;
   margin: 0 auto;
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -712,11 +712,11 @@ body.public .shell {
 
 .auth-brand-panel {
   position: relative;
-  padding: clamp(34px, 5vw, 62px) clamp(30px, 4vw, 56px) 36px;
+  padding: 62px 56px 42px;
   text-align: center;
   display: grid;
   justify-items: center;
-  align-content: center;
+  align-content: start;
   background:
     radial-gradient(circle at 0% 0%, rgba(31, 149, 88, 0.12), transparent 32%),
     radial-gradient(circle at 100% 100%, rgba(31, 149, 88, 0.14), transparent 30%),
@@ -733,8 +733,8 @@ body.public .shell {
 
 .auth-logo-wrap {
   position: relative;
-  width: clamp(116px, 13vw, 164px);
-  height: clamp(116px, 13vw, 164px);
+  width: 164px;
+  height: 164px;
   margin-bottom: 12px;
   display: grid;
   place-items: center;
@@ -742,8 +742,8 @@ body.public .shell {
 }
 
 .auth-logo-wrap img {
-  width: calc(100% - 8px);
-  height: calc(100% - 8px);
+  width: 156px;
+  height: 156px;
   object-fit: contain;
   background: transparent;
   filter: drop-shadow(0 18px 26px rgba(25, 107, 68, 0.14));
@@ -751,7 +751,7 @@ body.public .shell {
 
 .auth-brand-panel h2 {
   margin: 0;
-  font-size: clamp(34px, 4vw, 44px);
+  font-size: 44px;
   line-height: 1;
   color: #192331;
 }
@@ -787,7 +787,7 @@ body.public .shell {
 .auth-brand-panel h3 {
   max-width: 470px;
   margin: 0;
-  font-size: clamp(24px, 3vw, 34px);
+  font-size: 34px;
   line-height: 1.35;
   color: #182232;
 }
@@ -838,7 +838,7 @@ body.public .shell {
   position: relative;
   width: min(370px, 100%);
   height: 190px;
-  margin-top: clamp(18px, 3vh, 30px);
+  margin-top: 30px;
 }
 
 .preview-screen {
@@ -913,13 +913,14 @@ body.public .shell {
 .auth-form-panel {
   display: grid;
   place-items: center;
-  min-width: 0;
-  padding: clamp(28px, 5vw, 64px) clamp(22px, 4vw, 54px);
+  padding: 64px 54px;
   background: rgba(255, 255, 255, 0.82);
+  min-height: 760px;
 }
 
 .auth-card {
   width: min(500px, 100%);
+  min-height: 600px;
   overflow: hidden;
   border-radius: 14px;
   border: 1px solid rgba(224, 232, 226, 0.9);
@@ -934,12 +935,8 @@ body.public .shell {
   border-bottom: 1px solid #e6ece8;
 }
 
-.auth-tabs.single {
-  grid-template-columns: 1fr;
-}
-
 .auth-tabs button {
-  min-height: clamp(58px, 8vh, 76px);
+  min-height: 76px;
   border: 0;
   background: linear-gradient(180deg, #ffffff, #fbfdfc);
   color: #6b7582;
@@ -964,13 +961,13 @@ body.public .shell {
 
 .auth-copy,
 .auth-form {
-  padding: 24px clamp(22px, 4vw, 44px) 0;
+  padding: 28px 44px 0;
 }
 
 .auth-copy h2 {
   margin-bottom: 8px;
   color: #182232;
-  font-size: clamp(24px, 3vw, 28px);
+  font-size: 28px;
 }
 
 .auth-copy p {
@@ -980,84 +977,108 @@ body.public .shell {
 }
 
 .auth-form {
-  padding-bottom: 32px;
-  gap: 16px;
+  padding-bottom: 40px;
+  gap: 18px;
+  min-height: 420px;
+  align-content: start;
+}
+
+.auth-form .field {
+  position: relative;
+  gap: 7px;
+  min-height: 99px;
+}
+
+.auth-form label {
+  line-height: 18px;
 }
 
 .auth-form input,
 .auth-form select {
-  height: 52px;
-  min-height: 52px;
-  padding: 12px 14px;
+  height: 56px;
+  min-height: 56px;
+  line-height: 20px;
   background: #ffffff;
   border-color: #dfe6e3;
-  border-radius: 7px;
   box-shadow: 0 10px 18px rgba(26, 67, 45, 0.04);
 }
 
-.auth-input-wrap {
+.auth-form input:focus,
+.auth-form select:focus,
+.auth-form input:focus-visible,
+.auth-form select:focus-visible {
+  height: 56px;
+  min-height: 56px;
+  margin: 0;
+  padding-top: 11px;
+  padding-bottom: 11px;
+  border-width: 1px;
+  border-color: #dfe6e3;
+  background: #ffffff;
+  line-height: 20px;
+  transform: none;
+  outline: none;
+  box-shadow: 0 10px 18px rgba(26, 67, 45, 0.04), var(--focus);
+}
+
+.auth-form input:valid,
+.auth-form input:invalid,
+.auth-form select:valid,
+.auth-form select:invalid {
+  height: 56px;
+  min-height: 56px;
+  border-width: 1px;
+  padding-top: 11px;
+  padding-bottom: 11px;
+  line-height: 20px;
+  transform: none;
+}
+
+.field-message {
+  display: block;
+  min-height: 18px;
+  line-height: 18px;
+  font-size: 12px;
+  color: #b45309;
+}
+
+.input-icon {
   position: relative;
-  width: 100%;
 }
 
-.auth-input-wrap input {
-  width: 100%;
+.input-icon input {
+  padding-right: 44px;
 }
 
-.auth-input-wrap input[type="password"]::-ms-reveal,
-.auth-input-wrap input[type="password"]::-ms-clear {
-  display: none;
+.password-field input {
+  padding-right: 86px;
 }
 
-.auth-input-icon,
-.password-toggle {
+.input-icon > span {
   position: absolute;
-  top: 50%;
-  transform: translateY(-50%);
-}
-
-.auth-input-icon {
   right: 14px;
-  width: 24px;
-  height: 24px;
-  display: grid;
-  place-items: center;
+  top: 40px;
   color: #778392;
   font-weight: 900;
-  line-height: 1;
-  pointer-events: none;
-}
-
-.auth-input-wrap:has(.auth-input-icon) input {
-  padding-right: 48px;
-}
-
-.password-wrap input {
-  padding-right: 82px;
 }
 
 .password-toggle {
+  position: absolute;
   right: 12px;
-  min-width: 54px;
-  min-height: 34px;
+  top: 31px;
+  min-height: 36px;
   padding: 0 10px;
   border: 0;
-  border-radius: 7px;
-  background: rgba(225, 246, 235, 0.92);
+  border-radius: 8px;
+  background: #eef7f2;
   color: var(--green);
   font-size: 12px;
   font-weight: 900;
-  line-height: 1;
   box-shadow: none;
 }
 
 .password-toggle:hover {
-  background: rgba(210, 241, 226, 0.98);
-  transform: translateY(-50%);
-}
-
-.password-toggle:focus-visible {
-  box-shadow: 0 0 0 3px rgba(var(--brand-green-rgb), 0.18);
+  background: #e0f1e9;
 }
 
 .auth-options {
@@ -1079,6 +1100,8 @@ body.public .shell {
 .check-label input {
   width: 18px;
   min-height: 18px;
+  flex: 0 0 18px;
+  accent-color: var(--green);
   box-shadow: none;
 }
 
@@ -1093,7 +1116,7 @@ body.public .shell {
 }
 
 .auth-submit {
-  min-height: 54px;
+  min-height: 58px;
   font-size: 17px;
   background:
     linear-gradient(145deg, rgba(255, 255, 255, 0.18), transparent),
@@ -1123,7 +1146,7 @@ body.public .shell {
 }
 
 .google-button {
-  min-height: 54px;
+  min-height: 58px;
   background: #ffffff;
   border-color: #dfe6e3;
   color: #243142;
@@ -1149,7 +1172,7 @@ body.public .shell {
   justify-content: center;
   gap: 14px;
   flex-wrap: wrap;
-  margin-top: 24px;
+  margin-top: 34px;
   color: #7b8793;
   font-weight: 700;
 }
@@ -1160,10 +1183,11 @@ body.public .shell {
 
 .signup-form {
   max-height: none;
+  overflow: visible;
 }
 
 .signup-form .grid.two {
-  grid-template-columns: 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .signup-form .field,
@@ -2607,18 +2631,15 @@ body:not(.public) .audience-open span {
   }
 
   .auth-stage {
-    min-height: 100dvh;
-    padding: 14px;
-    overflow: auto;
+    padding: 18px;
   }
 
   .auth-shell {
-    max-width: 720px;
     min-height: auto;
   }
 
   .auth-brand-panel {
-    padding: 24px 18px 20px;
+    padding: 30px 22px 24px;
   }
 
   .auth-brand-panel::after {
@@ -2676,17 +2697,31 @@ body:not(.public) .audience-open span {
   }
 
   .auth-form-panel {
-    padding: 18px 14px 24px;
+    padding: 28px 18px 34px;
+    min-height: auto;
   }
 
   .auth-copy,
   .auth-form {
-    padding-left: 18px;
-    padding-right: 18px;
+    padding-left: 22px;
+    padding-right: 22px;
+  }
+
+  .auth-card {
+    min-height: auto;
+  }
+
+  .auth-form {
+    min-height: 380px;
   }
 
   .signup-form {
     max-height: none;
+    overflow: visible;
+  }
+
+  .signup-form .grid.two {
+    grid-template-columns: 1fr;
   }
 
   .landing-copy h1 {

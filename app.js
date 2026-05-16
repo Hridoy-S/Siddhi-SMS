@@ -9,7 +9,6 @@ const state = {
   rememberMe: false,
   adminEmail: "admin@siddhisms.com",
   adminPassword: "admin123",
-  passwordVisible: { login: false, admin: false, signup: false, reset: false, resetConfirm: false },
   adminProfile: { id: "", name: "", company: "", email: "", phone: "", newPassword: "", confirmPassword: "" },
   userSearch: "",
   documentUrls: {},
@@ -172,7 +171,7 @@ async function loadRemoteState(role, userId) {
 
 function saveSession(role = state.sessionRole, userId = state.currentUserId) {
   if (!role || !userId) return;
-  const payload = JSON.stringify({ role, userId, savedAt: Date.now(), rememberMe: Boolean(state.rememberMe) });
+  const payload = JSON.stringify({ role, userId, savedAt: Date.now(), rememberMe: state.rememberMe });
   localStorage.setItem(rememberPreferenceKey, JSON.stringify(Boolean(state.rememberMe)));
   if (state.rememberMe) {
     sessionStorage.removeItem(sessionStorageKey);
@@ -535,11 +534,6 @@ function renderModeSwitch() {
     switcher.innerHTML = "";
     return;
   }
-  if (state.sessionRole !== "admin") {
-    state.mode = "user";
-    switcher.innerHTML = "";
-    return;
-  }
   switcher.innerHTML = `
     <button class="tab ${state.mode === "admin" ? "active" : ""}" data-mode="admin">Admin</button>
     <button class="tab ${state.mode === "user" ? "active" : ""}" data-mode="user">User</button>
@@ -633,7 +627,7 @@ function publicActions() {
 }
 
 function publicView() {
-  if (state.authView === "admin-login" && !isAdminLoginPath()) state.authView = "landing";
+  syncAuthViewFromPath();
   const views = {
     landing,
     "user-login": userLogin,
@@ -665,7 +659,6 @@ function landing() {
 }
 
 function authExperience(activeTab, formMarkup, headline = "আপনার ব্যবসার সাথে যোগাযোগ হোক আরও সহজ") {
-  const isAdminAuth = activeTab === "admin-login";
   return `
     <section class="auth-stage">
       <span class="auth-orbit orbit-one"></span>
@@ -700,9 +693,9 @@ function authExperience(activeTab, formMarkup, headline = "আপনার ব�
         </aside>
         <div class="auth-form-panel">
           <div class="auth-card">
-            <div class="auth-tabs ${isAdminAuth ? "single" : ""}">
-              <button type="button" class="${activeTab === "user-login" || isAdminAuth ? "active" : ""}" data-auth="${isAdminAuth ? "admin-login" : "user-login"}">${isAdminAuth ? "অ্যাডমিন লগ ইন" : "লগ ইন"}</button>
-              ${isAdminAuth ? "" : `<button type="button" class="${activeTab === "signup" ? "active" : ""}" data-auth="signup">সাইন আপ</button>`}
+            <div class="auth-tabs">
+              <button class="${activeTab === "user-login" || activeTab === "admin-login" ? "active" : ""}" data-auth="${activeTab === "admin-login" ? "admin-login" : "user-login"}">লগ ইন</button>
+              <button class="${activeTab === "signup" ? "active" : ""}" data-auth="signup">সাইন আপ</button>
             </div>
             ${formMarkup}
           </div>
@@ -710,41 +703,59 @@ function authExperience(activeTab, formMarkup, headline = "আপনার ব�
       </div>
       <footer class="auth-footer">
         <span>© 2026 Siddhi SMS. সর্বস্বত্ব সংরক্ষিত।</span>
-        <button type="button" data-auth="landing">গোপনীয়তা নীতি</button>
-        <button type="button" data-auth="landing">শর্তাবলী</button>
-        <button type="button" data-auth="forgot">সহায়তা</button>
+        <button data-auth="landing">গোপনীয়তা নীতি</button>
+        <button data-auth="landing">শর্তাবলী</button>
+        <button data-auth="forgot">সহায়তা</button>
       </footer>
     </section>
   `;
 }
 
+function passwordInput(id, value, label, placeholder = "") {
+  return `
+    <div class="field input-icon password-field">
+      <label>${label}</label>
+      <input id="${id}" type="password" value="${escapeHtml(value)}" placeholder="${escapeHtml(placeholder)}" />
+      <button class="password-toggle" type="button" data-action="toggle-password" data-target="${id}" aria-label="Show password" aria-pressed="false">Show</button>
+    </div>
+  `;
+}
+
+function enhanceAuthControls() {
+  document.querySelector(".admin-entry")?.remove();
+  document.querySelectorAll(".auth-form .field").forEach(field => {
+    if (!field.querySelector(".field-message")) {
+      const message = document.createElement("span");
+      message.className = "field-message";
+      message.setAttribute("aria-hidden", "true");
+      field.appendChild(message);
+    }
+  });
+  const remember = document.querySelector(".auth-options .check-label input[type='checkbox']");
+  if (remember) {
+    remember.id = "remember-me";
+    remember.checked = state.rememberMe;
+  }
+  document.querySelectorAll(".auth-card input[type='password']").forEach(input => {
+    const field = input.closest(".field");
+    if (!field || field.querySelector(".password-toggle")) return;
+    field.classList.add("input-icon", "password-field");
+    const icon = field.querySelector(":scope > span:not(.field-message)");
+    if (icon) icon.remove();
+    const button = document.createElement("button");
+    button.className = "password-toggle";
+    button.type = "button";
+    button.dataset.action = "toggle-password";
+    button.dataset.target = input.id;
+    button.setAttribute("aria-label", "Show password");
+    button.setAttribute("aria-pressed", "false");
+    button.textContent = "Show";
+    field.appendChild(button);
+  });
+}
+
 function userLogin() {
   return authExperience("user-login", userLoginForm());
-}
-
-function authIconInput(id, label, type, value, autocomplete, placeholder = "", icon = "✉") {
-  return `
-    <div class="field">
-      <label for="${id}">${label}</label>
-      <div class="auth-input-wrap">
-        <input id="${id}" type="${type}" autocomplete="${autocomplete}" value="${escapeHtml(value)}" placeholder="${escapeHtml(placeholder)}" />
-        <span class="auth-input-icon">${icon}</span>
-      </div>
-    </div>
-  `;
-}
-
-function authPasswordInput(id, label, value, autocomplete, visibleKey, placeholder = "") {
-  const isVisible = Boolean(state.passwordVisible?.[visibleKey]);
-  return `
-    <div class="field">
-      <label for="${id}">${label}</label>
-      <div class="auth-input-wrap password-wrap">
-        <input id="${id}" type="${isVisible ? "text" : "password"}" autocomplete="${autocomplete}" value="${escapeHtml(value)}" placeholder="${escapeHtml(placeholder)}" />
-        <button type="button" class="password-toggle" data-action="toggle-password" data-target="${visibleKey}" aria-label="${isVisible ? "Hide password" : "Show password"}">${isVisible ? "Hide" : "Show"}</button>
-      </div>
-    </div>
-  `;
 }
 
 function userLoginForm() {
@@ -754,13 +765,14 @@ function userLoginForm() {
       <p>আপনার অ্যাকাউন্টে লগ ইন করুন</p>
     </div>
     <div class="form auth-form">
-      ${authIconInput("login-email", "ইমেইল ঠিকানা", "email", state.loginEmail, "email", "আপনার ইমেইল লিখুন")}
-      ${authPasswordInput("login-password", "পাসওয়ার্ড", state.loginPassword, "current-password", "login", "আপনার পাসওয়ার্ড লিখুন")}
-      <div class="auth-options"><label class="check-label"><input id="remember-me" type="checkbox" ${state.rememberMe ? "checked" : ""} /> আমাকে মনে রাখুন</label><button type="button" class="link-button" data-auth="forgot">পাসওয়ার্ড ভুলেছেন?</button></div>
-      <button type="button" class="primary auth-submit" data-action="user-login">লগ ইন করুন</button>
+      <div class="field input-icon"><label>ইমেইল ঠিকানা</label><input id="login-email" value="${escapeHtml(state.loginEmail)}" placeholder="আপনার ইমেইল লিখুন" /><span>✉</span></div>
+      <div class="field input-icon"><label>পাসওয়ার্ড</label><input id="login-password" type="password" value="${escapeHtml(state.loginPassword)}" placeholder="আপনার পাসওয়ার্ড লিখুন" /><span>●</span></div>
+      <div class="auth-options"><label class="check-label"><input type="checkbox" /> আমাকে মনে রাখুন</label><button class="link-button" data-auth="forgot">পাসওয়ার্ড ভুলেছেন?</button></div>
+      <button class="primary auth-submit" data-action="user-login">লগ ইন করুন</button>
       <div class="auth-separator"><span>অথবা</span></div>
       <button class="secondary google-button" type="button"><span>G</span> Google দিয়ে লগ ইন করুন</button>
-      <p class="auth-switch">আপনার অ্যাকাউন্ট নেই? <button type="button" data-auth="signup">সাইন আপ করুন</button></p>
+      <p class="auth-switch">আপনার অ্যাকাউন্ট নেই? <button data-auth="signup">সাইন আপ করুন</button></p>
+      <p class="auth-switch admin-entry">Admin access? <button data-auth="admin-login">Open admin portal</button></p>
     </div>
   `;
 }
@@ -774,10 +786,10 @@ function adminLogin() {
       </div>
       <div class="form auth-form">
         <p class="hint">Demo admin: admin@siddhisms.com / admin123</p>
-        ${authIconInput("admin-email", "অ্যাডমিন ইমেইল", "email", state.adminEmail, "username")}
-        ${authPasswordInput("admin-password", "পাসওয়ার্ড", state.adminPassword, "current-password", "admin")}
-        <label class="check-label"><input id="remember-me" type="checkbox" ${state.rememberMe ? "checked" : ""} /> আমাকে মনে রাখুন</label>
-        <button type="button" class="primary auth-submit" data-action="admin-login">অ্যাডমিন প্যানেলে যান</button>
+        <div class="field input-icon"><label>অ্যাডমিন ইমেইল</label><input id="admin-email" value="${escapeHtml(state.adminEmail)}" /><span>✉</span></div>
+        <div class="field input-icon"><label>পাসওয়ার্ড</label><input id="admin-password" type="password" value="${escapeHtml(state.adminPassword)}" /><span>●</span></div>
+        <button class="primary auth-submit" data-action="admin-login">অ্যাডমিন প্যানেলে যান</button>
+        <p class="auth-switch">Customer login? <button data-auth="user-login">Back to user login</button></p>
       </div>
     `, "আপনার অপারেশন থাকুক সম্পূর্ণ নিয়ন্ত্রণে")}
   `;
@@ -791,20 +803,20 @@ function signup() {
     </div>
     <div class="form auth-form signup-form">
       <div class="grid two">
-        <div class="field"><label for="signup-name">আপনার নাম</label><input id="signup-name" autocomplete="name" value="${escapeHtml(state.signup.name)}" /></div>
-        <div class="field"><label for="signup-company">কোম্পানির নাম</label><input id="signup-company" autocomplete="organization" value="${escapeHtml(state.signup.company)}" /></div>
+        <div class="field"><label>আপনার নাম</label><input id="signup-name" value="${escapeHtml(state.signup.name)}" /></div>
+        <div class="field"><label>কোম্পানির নাম</label><input id="signup-company" value="${escapeHtml(state.signup.company)}" /></div>
       </div>
       <div class="grid two">
-        <div class="field"><label for="signup-email">ইমেইল</label><input id="signup-email" type="email" autocomplete="email" value="${escapeHtml(state.signup.email)}" /></div>
-        <div class="field"><label for="signup-phone">ফোন</label><input id="signup-phone" type="tel" autocomplete="tel" value="${escapeHtml(state.signup.phone)}" /></div>
+        <div class="field"><label>ইমেইল</label><input id="signup-email" value="${escapeHtml(state.signup.email)}" /></div>
+        <div class="field"><label>ফোন</label><input id="signup-phone" value="${escapeHtml(state.signup.phone)}" /></div>
       </div>
       <div class="grid two">
-        <div class="field"><label for="signup-company-type">কোম্পানি টাইপ</label><select id="signup-company-type">${["E-commerce", "Education", "Healthcare", "ISP", "Finance", "Agency", "Other"].map(type => `<option ${state.signup.companyType === type ? "selected" : ""}>${type}</option>`).join("")}</select></div>
+        <div class="field"><label>কোম্পানি টাইপ</label><select id="signup-company-type">${["E-commerce", "Education", "Healthcare", "ISP", "Finance", "Agency", "Other"].map(type => `<option ${state.signup.companyType === type ? "selected" : ""}>${type}</option>`).join("")}</select></div>
       </div>
-      <div class="field"><label for="signup-address">ঠিকানা</label><input id="signup-address" autocomplete="street-address" value="${escapeHtml(state.signup.address)}" /></div>
-      ${authPasswordInput("signup-password", "পাসওয়ার্ড", state.signup.password, "new-password", "signup")}
-      <button type="button" class="primary auth-submit" data-action="signup-submit">অনুমোদনের জন্য জমা দিন</button>
-      <p class="auth-switch">আগেই অ্যাকাউন্ট আছে? <button type="button" data-auth="user-login">লগ ইন করুন</button></p>
+      <div class="field"><label>ঠিকানা</label><input id="signup-address" value="${escapeHtml(state.signup.address)}" /></div>
+      <div class="field"><label>পাসওয়ার্ড</label><input id="signup-password" type="password" value="${escapeHtml(state.signup.password)}" /></div>
+      <button class="primary auth-submit" data-action="signup-submit">অনুমোদনের জন্য জমা দিন</button>
+      <p class="auth-switch">আগেই অ্যাকাউন্ট আছে? <button data-auth="user-login">লগ ইন করুন</button></p>
     </div>
   `);
 }
@@ -841,9 +853,9 @@ function forgot() {
       <p>ইমেইল দিন, আমরা রিসেট অনুরোধ তৈরি করব</p>
     </div>
     <div class="form auth-form">
-      ${authIconInput("forgot-email", "ইমেইল", "email", state.forgotEmail, "email")}
-      <button type="button" class="primary auth-submit" data-action="forgot-submit">রিসেট অনুরোধ পাঠান</button>
-      <button type="button" class="secondary" data-auth="user-login">লগ ইনে ফিরুন</button>
+      <div class="field input-icon"><label>ইমেইল</label><input id="forgot-email" value="${escapeHtml(state.forgotEmail)}" /><span>✉</span></div>
+      <button class="primary auth-submit" data-action="forgot-submit">রিসেট অনুরোধ পাঠান</button>
+      <button class="secondary" data-auth="user-login">লগ ইনে ফিরুন</button>
     </div>
   `, "নিরাপদ অ্যাক্সেস, দ্রুত পুনরুদ্ধার");
 }
@@ -855,10 +867,10 @@ function resetPasswordView() {
       <p>${state.resetEmail ? `Reset password for ${escapeHtml(state.resetEmail)}` : "Create a new secure password for your account"}</p>
     </div>
     <div class="form auth-form">
-      ${authPasswordInput("reset-password", "New password", state.resetPassword, "new-password", "reset")}
-      ${authPasswordInput("reset-password-confirm", "Confirm password", state.resetPasswordConfirm, "new-password", "resetConfirm")}
-      <button type="button" class="primary auth-submit" data-action="reset-password-submit">Update password</button>
-      <button type="button" class="secondary" data-auth="user-login">Back to login</button>
+      <div class="field input-icon"><label>New password</label><input id="reset-password" type="password" value="${escapeHtml(state.resetPassword)}" /><span>●</span></div>
+      <div class="field input-icon"><label>Confirm password</label><input id="reset-password-confirm" type="password" value="${escapeHtml(state.resetPasswordConfirm)}" /><span>●</span></div>
+      <button class="primary auth-submit" data-action="reset-password-submit">Update password</button>
+      <button class="secondary" data-auth="user-login">Back to login</button>
     </div>
   `, "নিরাপদ পাসওয়ার্ড, নিরাপদ অ্যাক্সেস");
 }
@@ -1928,16 +1940,15 @@ function compliance() {
 function render() {
   document.body.classList.toggle("public", !isLoggedIn());
   if (!isLoggedIn()) {
-    syncAuthViewFromPath();
     renderModeSwitch();
     renderNav();
     document.querySelector("#page-title").textContent = publicTitle();
-    document.querySelector(".top-actions").innerHTML = isAdminLoginPath() ? "" : publicActions();
+    document.querySelector(".top-actions").innerHTML = publicActions();
     document.querySelector("#view").innerHTML = publicView();
+    enhanceAuthControls();
     renderModal();
     return;
   }
-  if (state.sessionRole !== "admin") state.mode = "user";
   document.querySelector(".top-actions").innerHTML = `<span class="badge info">${state.sessionRole === "admin" ? "Admin Portal" : "User Portal"}</span><button class="icon-button" title="Notifications">!</button><button class="primary" data-action="new-campaign">Quick SMS</button><button class="secondary" data-action="logout">Logout</button>`;
   if (!navItems().some(([key]) => key === state.active)) state.active = "dashboard";
   renderModeSwitch();
@@ -2103,8 +2114,9 @@ async function uploadMaskingDocument(file, userId) {
 document.addEventListener("click", async event => {
   const auth = event.target.closest("[data-auth]")?.dataset.auth;
   if (auth) {
-    if (auth === "admin-login" && !isAdminLoginPath()) return;
-    if (isAdminLoginPath() && auth !== "admin-login" && auth !== "forgot") {
+    if (auth === "admin-login" && !isAdminLoginPath()) {
+      window.history.pushState({}, "", adminLoginPath);
+    } else if (auth !== "admin-login" && isAdminLoginPath()) {
       window.history.pushState({}, "", "/");
     }
     state.authView = auth;
@@ -2114,7 +2126,6 @@ document.addEventListener("click", async event => {
 
   const mode = event.target.closest("[data-mode]")?.dataset.mode;
   if (mode) {
-    if (state.sessionRole !== "admin") return;
     state.mode = mode;
     state.active = "dashboard";
     render();
@@ -2145,17 +2156,20 @@ document.addEventListener("click", async event => {
     shouldPersist = false;
     clearSession();
     state.sessionRole = null;
-    state.authView = isAdminLoginPath() ? "admin-login" : "landing";
+    state.authView = "landing";
     render();
     return;
   }
 
   if (action === "toggle-password") {
     shouldPersist = false;
-    const target = button.dataset.target;
-    if (target && state.passwordVisible && Object.hasOwn(state.passwordVisible, target)) {
-      state.passwordVisible[target] = !state.passwordVisible[target];
-      render();
+    const input = document.getElementById(button.dataset.target);
+    if (input) {
+      const showing = input.type === "text";
+      input.type = showing ? "password" : "text";
+      button.textContent = showing ? "Show" : "Hide";
+      button.setAttribute("aria-label", showing ? "Show password" : "Hide password");
+      button.setAttribute("aria-pressed", String(!showing));
     }
     return;
   }
