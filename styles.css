@@ -1899,7 +1899,7 @@ table {
 }
 
 .users-table {
-  min-width: 1220px;
+  min-width: 1160px;
 }
 
 .users-table th:nth-child(1),
@@ -1934,7 +1934,7 @@ table {
 
 .users-table th:nth-child(7),
 .users-table td:nth-child(7) {
-  width: 210px;
+  width: 260px;
 }
 
 .order-table {
@@ -1972,7 +1972,7 @@ table {
 
 .masking-table th:nth-child(6),
 .masking-table td:nth-child(6) {
-  width: 210px;
+  width: 260px;
 }
 
 th,
@@ -2055,10 +2055,11 @@ td strong {
 
 .user-actions {
   display: grid;
-  grid-template-columns: minmax(92px, 1fr) minmax(92px, 1fr);
-  gap: 10px;
+  grid-template-columns: repeat(2, minmax(94px, 1fr));
+  gap: 8px;
   align-items: start;
-  max-width: 210px;
+  width: 100%;
+  max-width: 240px;
 }
 
 .user-actions > button,
@@ -2066,8 +2067,10 @@ td strong {
   min-height: 40px;
   display: grid;
   place-items: center;
-  border-radius: 7px;
+  border-radius: 9px;
   white-space: nowrap;
+  font-size: 13px;
+  font-weight: 900;
 }
 
 .action-menu {
@@ -2094,13 +2097,17 @@ td strong {
 }
 
 .action-menu-panel {
-  margin-top: 8px;
-  width: 178px;
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 240px;
   display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
-  padding: 10px;
+  padding: 8px;
   border: 1px solid rgba(212, 238, 230, 0.2);
-  border-radius: 10px;
+  border-radius: 12px;
   background:
     linear-gradient(145deg, rgba(21, 33, 31, 0.98), rgba(5, 13, 20, 0.98)),
     #07110f;
@@ -2110,6 +2117,48 @@ td strong {
 .action-menu-panel button {
   width: 100%;
   min-height: 38px;
+  padding-inline: 10px;
+  font-size: 12px;
+}
+
+.action-menu-panel .danger {
+  grid-column: 1 / -1;
+}
+
+.users-table .manage-toggle.active {
+  border-color: rgba(111, 240, 178, 0.68);
+  background: rgba(19, 119, 88, 0.42);
+}
+
+.masking-table .manage-toggle.active {
+  border-color: rgba(111, 240, 178, 0.68);
+  background: rgba(19, 119, 88, 0.42);
+}
+
+.users-table .action-menu-panel {
+  position: static;
+  z-index: auto;
+  grid-column: 1 / -1;
+  width: 100%;
+  margin-top: 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.users-table .action-menu-panel .danger {
+  grid-column: 1 / -1;
+}
+
+.masking-table .action-menu-panel {
+  position: static !important;
+  z-index: auto;
+  grid-column: 1 / -1;
+  width: 100% !important;
+  margin-top: 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+}
+
+.masking-table .action-menu-panel .danger {
+  grid-column: auto !important;
 }
 
 .admin-settings-form {

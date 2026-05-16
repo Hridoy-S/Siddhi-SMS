@@ -11,6 +11,8 @@ const state = {
   adminPassword: "admin123",
   adminProfile: { id: "", name: "", company: "", email: "", phone: "", newPassword: "", confirmPassword: "" },
   userSearch: "",
+  openUserActionId: null,
+  openMaskingActionId: null,
   documentUrls: {},
   modal: null,
   resetToken: "",
@@ -1071,13 +1073,13 @@ function maskingApprovalTable(rows) {
             <td>
               <div class="user-actions">
                 <button class="secondary" data-action="view-masking" data-id="${user.id}">View</button>
-                <details class="action-menu">
-                  <summary>Edit</summary>
+                <button class="secondary manage-toggle ${state.openMaskingActionId === user.id ? "active" : ""}" data-action="toggle-masking-actions" data-id="${user.id}">Manage</button>
+                ${state.openMaskingActionId === user.id ? `
                   <div class="action-menu-panel">
                     <button class="primary" data-action="approve-masking" data-id="${user.id}">Approve masking</button>
                     <button class="danger" data-action="reject-masking" data-id="${user.id}">Reject</button>
                   </div>
-                </details>
+                ` : ""}
               </div>
             </td>
           </tr>`;
@@ -1158,14 +1160,14 @@ function usersTable(rows = state.users) {
           <td>
             <div class="user-actions">
               <button class="secondary" data-action="view-account" data-id="${user.id}">View</button>
-              <details class="action-menu">
-                <summary>Edit</summary>
+              <button class="secondary manage-toggle ${state.openUserActionId === user.id ? "active" : ""}" data-action="toggle-user-actions" data-id="${user.id}">Manage</button>
+              ${state.openUserActionId === user.id ? `
                 <div class="action-menu-panel">
-                  ${user.status === "Suspended" ? `<button class="primary" data-action="activate-account" data-id="${user.id}">Activate</button>` : `<button class="secondary" data-action="deactivate-account" data-id="${user.id}">Deactivate</button>`}
                   <button class="secondary" data-action="send-reset" data-id="${user.id}">Reset link</button>
+                  ${user.status === "Suspended" ? `<button class="primary" data-action="activate-account" data-id="${user.id}">Activate</button>` : `<button class="secondary" data-action="deactivate-account" data-id="${user.id}">Deactivate</button>`}
                   <button class="danger" data-action="delete-account" data-id="${user.id}">Delete</button>
                 </div>
-              </details>
+              ` : ""}
             </div>
           </td>
         </tr>`).join("")}</tbody>
@@ -2144,6 +2146,22 @@ document.addEventListener("click", async event => {
   const action = button?.dataset.action;
   if (!action) return;
   let shouldPersist = true;
+
+  if (action === "toggle-user-actions") {
+    shouldPersist = false;
+    const id = button.dataset.id;
+    state.openUserActionId = state.openUserActionId === id ? null : id;
+    render();
+    return;
+  }
+
+  if (action === "toggle-masking-actions") {
+    shouldPersist = false;
+    const id = button.dataset.id;
+    state.openMaskingActionId = state.openMaskingActionId === id ? null : id;
+    render();
+    return;
+  }
 
   if (action === "close-modal") {
     shouldPersist = false;
