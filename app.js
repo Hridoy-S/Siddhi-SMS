@@ -4,11 +4,11 @@ const state = {
   mode: "admin",
   active: "dashboard",
   currentUserId: "u1",
-  loginEmail: "owner@dhakaretail.com",
-  loginPassword: "demo123",
+  loginEmail: "",
+  loginPassword: "",
   rememberMe: false,
-  adminEmail: "admin@siddhisms.com",
-  adminPassword: "admin123",
+  adminEmail: "",
+  adminPassword: "",
   adminProfile: { id: "", name: "", company: "", email: "", phone: "", newPassword: "", confirmPassword: "" },
   userSearch: "",
   openUserActionId: null,
@@ -661,6 +661,7 @@ function landing() {
 }
 
 function authExperience(activeTab, formMarkup, headline = "আপনার ব্যবসার সাথে যোগাযোগ হোক আরও সহজ") {
+  const isAdminAuth = activeTab === "admin-login";
   return `
     <section class="auth-stage">
       <span class="auth-orbit orbit-one"></span>
@@ -695,9 +696,9 @@ function authExperience(activeTab, formMarkup, headline = "আপনার ব�
         </aside>
         <div class="auth-form-panel">
           <div class="auth-card">
-            <div class="auth-tabs">
+            <div class="auth-tabs ${isAdminAuth ? "single" : ""}">
               <button class="${activeTab === "user-login" || activeTab === "admin-login" ? "active" : ""}" data-auth="${activeTab === "admin-login" ? "admin-login" : "user-login"}">লগ ইন</button>
-              <button class="${activeTab === "signup" ? "active" : ""}" data-auth="signup">সাইন আপ</button>
+              ${isAdminAuth ? "" : `<button class="${activeTab === "signup" ? "active" : ""}" data-auth="signup">সাইন আপ</button>`}
             </div>
             ${formMarkup}
           </div>
@@ -717,14 +718,13 @@ function passwordInput(id, value, label, placeholder = "") {
   return `
     <div class="field input-icon password-field">
       <label>${label}</label>
-      <input id="${id}" type="password" value="${escapeHtml(value)}" placeholder="${escapeHtml(placeholder)}" />
+      <input id="${id}" type="password" autocomplete="current-password" placeholder="${escapeHtml(placeholder)}" />
       <button class="password-toggle" type="button" data-action="toggle-password" data-target="${id}" aria-label="Show password" aria-pressed="false">Show</button>
     </div>
   `;
 }
 
 function enhanceAuthControls() {
-  document.querySelector(".admin-entry")?.remove();
   document.querySelectorAll(".auth-form .field").forEach(field => {
     if (!field.querySelector(".field-message")) {
       const message = document.createElement("span");
@@ -767,14 +767,13 @@ function userLoginForm() {
       <p>আপনার অ্যাকাউন্টে লগ ইন করুন</p>
     </div>
     <div class="form auth-form">
-      <div class="field input-icon"><label>ইমেইল ঠিকানা</label><input id="login-email" value="${escapeHtml(state.loginEmail)}" placeholder="আপনার ইমেইল লিখুন" /><span>✉</span></div>
-      <div class="field input-icon"><label>পাসওয়ার্ড</label><input id="login-password" type="password" value="${escapeHtml(state.loginPassword)}" placeholder="আপনার পাসওয়ার্ড লিখুন" /><span>●</span></div>
+      <div class="field input-icon"><label>ইমেইল ঠিকানা</label><input id="login-email" type="email" autocomplete="username" placeholder="আপনার ইমেইল লিখুন" /><span>✉</span></div>
+      <div class="field input-icon"><label>পাসওয়ার্ড</label><input id="login-password" type="password" autocomplete="current-password" placeholder="আপনার পাসওয়ার্ড লিখুন" /><span>●</span></div>
       <div class="auth-options"><label class="check-label"><input type="checkbox" /> আমাকে মনে রাখুন</label><button class="link-button" data-auth="forgot">পাসওয়ার্ড ভুলেছেন?</button></div>
       <button class="primary auth-submit" data-action="user-login">লগ ইন করুন</button>
       <div class="auth-separator"><span>অথবা</span></div>
       <button class="secondary google-button" type="button"><span>G</span> Google দিয়ে লগ ইন করুন</button>
       <p class="auth-switch">আপনার অ্যাকাউন্ট নেই? <button data-auth="signup">সাইন আপ করুন</button></p>
-      <p class="auth-switch admin-entry">Admin access? <button data-auth="admin-login">Open admin portal</button></p>
     </div>
   `;
 }
@@ -787,11 +786,9 @@ function adminLogin() {
         <p>প্ল্যাটফর্ম কন্ট্রোল সেন্টারে প্রবেশ করুন</p>
       </div>
       <div class="form auth-form">
-        <p class="hint">Demo admin: admin@siddhisms.com / admin123</p>
-        <div class="field input-icon"><label>অ্যাডমিন ইমেইল</label><input id="admin-email" value="${escapeHtml(state.adminEmail)}" /><span>✉</span></div>
-        <div class="field input-icon"><label>পাসওয়ার্ড</label><input id="admin-password" type="password" value="${escapeHtml(state.adminPassword)}" /><span>●</span></div>
+        <div class="field input-icon"><label>অ্যাডমিন ইমেইল</label><input id="admin-email" type="email" autocomplete="username" placeholder="admin@example.com" /><span>✉</span></div>
+        <div class="field input-icon"><label>পাসওয়ার্ড</label><input id="admin-password" type="password" autocomplete="current-password" placeholder="পাসওয়ার্ড লিখুন" /><span>●</span></div>
         <button class="primary auth-submit" data-action="admin-login">অ্যাডমিন প্যানেলে যান</button>
-        <p class="auth-switch">Customer login? <button data-auth="user-login">Back to user login</button></p>
       </div>
     `, "আপনার অপারেশন থাকুক সম্পূর্ণ নিয়ন্ত্রণে")}
   `;
@@ -816,7 +813,7 @@ function signup() {
         <div class="field"><label>কোম্পানি টাইপ</label><select id="signup-company-type">${["E-commerce", "Education", "Healthcare", "ISP", "Finance", "Agency", "Other"].map(type => `<option ${state.signup.companyType === type ? "selected" : ""}>${type}</option>`).join("")}</select></div>
       </div>
       <div class="field"><label>ঠিকানা</label><input id="signup-address" value="${escapeHtml(state.signup.address)}" /></div>
-      <div class="field"><label>পাসওয়ার্ড</label><input id="signup-password" type="password" value="${escapeHtml(state.signup.password)}" /></div>
+      <div class="field"><label>পাসওয়ার্ড</label><input id="signup-password" type="password" autocomplete="new-password" /></div>
       <button class="primary auth-submit" data-action="signup-submit">অনুমোদনের জন্য জমা দিন</button>
       <p class="auth-switch">আগেই অ্যাকাউন্ট আছে? <button data-auth="user-login">লগ ইন করুন</button></p>
     </div>
@@ -1945,7 +1942,7 @@ function render() {
     renderModeSwitch();
     renderNav();
     document.querySelector("#page-title").textContent = publicTitle();
-    document.querySelector(".top-actions").innerHTML = publicActions();
+    document.querySelector(".top-actions").innerHTML = isAdminLoginPath() ? "" : publicActions();
     document.querySelector("#view").innerHTML = publicView();
     enhanceAuthControls();
     renderModal();
@@ -2117,8 +2114,9 @@ document.addEventListener("click", async event => {
   const auth = event.target.closest("[data-auth]")?.dataset.auth;
   if (auth) {
     if (auth === "admin-login" && !isAdminLoginPath()) {
-      window.history.pushState({}, "", adminLoginPath);
-    } else if (auth !== "admin-login" && isAdminLoginPath()) {
+      return;
+    }
+    if (auth !== "admin-login" && isAdminLoginPath()) {
       window.history.pushState({}, "", "/");
     }
     state.authView = auth;
@@ -2174,6 +2172,10 @@ document.addEventListener("click", async event => {
     shouldPersist = false;
     clearSession();
     state.sessionRole = null;
+    state.loginEmail = "";
+    state.loginPassword = "";
+    state.adminEmail = "";
+    state.adminPassword = "";
     state.authView = "landing";
     render();
     return;
@@ -2195,6 +2197,10 @@ document.addEventListener("click", async event => {
   if (action === "user-login") {
     shouldPersist = false;
     try {
+      const emailInput = document.getElementById("login-email");
+      const passwordInput = document.getElementById("login-password");
+      state.loginEmail = emailInput ? emailInput.value.trim() : state.loginEmail.trim();
+      state.loginPassword = passwordInput ? passwordInput.value : state.loginPassword;
       const payload = await apiRequest("/api/app/login", {
         method: "POST",
         body: JSON.stringify({ email: state.loginEmail, password: state.loginPassword, role: "user" })
@@ -2216,6 +2222,10 @@ document.addEventListener("click", async event => {
   if (action === "admin-login") {
     shouldPersist = false;
     try {
+      const emailInput = document.getElementById("admin-email");
+      const passwordInput = document.getElementById("admin-password");
+      state.adminEmail = emailInput ? emailInput.value.trim() : state.adminEmail.trim();
+      state.adminPassword = passwordInput ? passwordInput.value : state.adminPassword;
       const payload = await apiRequest("/api/app/login", {
         method: "POST",
         body: JSON.stringify({ email: state.adminEmail, password: state.adminPassword, role: "admin" })

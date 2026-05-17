@@ -935,6 +935,10 @@ body.public .shell {
   border-bottom: 1px solid #e6ece8;
 }
 
+.auth-tabs.single {
+  grid-template-columns: 1fr;
+}
+
 .auth-tabs button {
   min-height: 76px;
   border: 0;
@@ -1134,10 +1138,41 @@ body.public .shell {
 
 .check-label input {
   width: 18px;
+  height: 18px;
   min-height: 18px;
   flex: 0 0 18px;
+  margin: 0;
+  padding: 0;
+  border: 1px solid #8ea09a;
+  border-radius: 4px;
+  background: #ffffff;
   accent-color: var(--green);
   box-shadow: none;
+}
+
+.auth-form .check-label input[type="checkbox"],
+.auth-form .check-label input[type="checkbox"]:hover,
+.auth-form .check-label input[type="checkbox"]:focus,
+.auth-form .check-label input[type="checkbox"]:focus-visible,
+.auth-form .check-label input[type="checkbox"]:valid,
+.auth-form .check-label input[type="checkbox"]:invalid {
+  width: 18px;
+  height: 18px;
+  min-height: 18px;
+  margin: 0;
+  padding: 0;
+  border-width: 1px;
+  border-color: #8ea09a;
+  border-radius: 4px;
+  background: #ffffff;
+  line-height: 1;
+  transform: none;
+  outline: none;
+  box-shadow: none;
+}
+
+.auth-form .check-label input[type="checkbox"]:focus-visible {
+  box-shadow: 0 0 0 3px rgba(var(--brand-green-rgb), 0.14);
 }
 
 .link-button,
